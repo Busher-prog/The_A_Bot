@@ -99,3 +99,25 @@ async def test_consultation_can_be_cancelled(env, content):
     await dp.feed_update(bot, make_message("просто питання"))  # back to normal mode
     to_managers = [m for m in session.sent("SendMessage") if m.chat_id == MANAGERS_CHAT]
     assert len(to_managers) == 1 and "Заявка" not in to_managers[0].text
+
+
+async def test_managers_private_chat_reply_goes_to_client_not_back_to_managers(env):
+    """Managers chat can be a manager's private chat with the bot."""
+    import datetime
+    from aiogram.types import Chat, Message, User
+    from bot.config import Settings
+
+    dp, bot, session = env
+    manager = User(id=555, is_bot=False, first_name="Manager")
+    dp["settings"] = Settings(bot_token="42:TEST", managers_chat_id=manager.id)
+    header = Message(message_id=5, date=datetime.datetime.now(),
+                     chat=Chat(id=manager.id, type="private"),
+                     from_user=User(id=BOT_ID, is_bot=True, first_name="bot"),
+                     text="📩 Повідомлення від клієнта\n👤 Olena @olena · #id777\n\nhi")
+    await dp.feed_update(bot, make_message("Добрий день!", user=manager, reply_to=header))
+    assert [c.chat_id for c in session.sent("CopyMessage")] == [CLIENT.id]
+
+    # a plain message (no Reply) is not treated as a client message
+    await dp.feed_update(bot, make_message("hello", user=manager))
+    assert "Reply" in session.sent("SendMessage")[-1].text
+    assert len(session.sent("CopyMessage")) == 1
