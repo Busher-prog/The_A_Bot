@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 class Buttons(BaseModel):
@@ -61,6 +61,11 @@ class Screen(BaseModel):
     buttons: list[ButtonRef]
 
 
+class Profile(BaseModel):
+    description: str = Field(max_length=512)
+    short_description: str = Field(max_length=120)
+
+
 class Content(BaseModel):
     start_screens: dict[str, Screen]
     buttons: Buttons
@@ -68,6 +73,7 @@ class Content(BaseModel):
     topics: list[Topic]
     consultation: Consultation
     manager: Manager
+    profile: Profile
     commands: dict[str, str]
 
     @field_validator("topics")

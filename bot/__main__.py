@@ -28,6 +28,12 @@ async def main() -> None:
     await bot.set_my_commands(
         [BotCommand(command=cmd, description=desc) for cmd, desc in content.commands.items()]
     )
+    # Profile texts live in texts.yaml too; only send them when they changed.
+    profile = content.profile
+    if (await bot.get_my_description()).description != profile.description.strip():
+        await bot.set_my_description(profile.description.strip())
+    if (await bot.get_my_short_description()).short_description != profile.short_description.strip():
+        await bot.set_my_short_description(profile.short_description.strip())
     await bot.delete_webhook(drop_pending_updates=False)
     logging.info("Bot started")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
