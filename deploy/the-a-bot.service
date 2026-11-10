@@ -1,0 +1,17 @@
+# systemd service: keeps the bot running and restarts it after crashes / reboots.
+# Install: sudo cp deploy/the-a-bot.service /etc/systemd/system/ && sudo systemctl enable --now the-a-bot
+[Unit]
+Description=The A Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=thea
+WorkingDirectory=/opt/the-a-bot
+EnvironmentFile=/opt/the-a-bot/.env
+ExecStart=/opt/the-a-bot/.venv/bin/python -m bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
