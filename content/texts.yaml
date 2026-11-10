@@ -37,7 +37,6 @@ screens:
 
       Робочі години: 10:00–22:00 CET. Перша відповідь - протягом 15 хвилин.
     buttons:
-    - id: photos
     - id: seg_banks
       label: 🏦 Банки і рахунки
     - id: seg_taxes
@@ -46,7 +45,6 @@ screens:
       label: 🏢 Компанія за кордоном
     - id: seg_other
       label: 🤔 Інше питання
-    - id: consult
   ybc:
     start_param: ybc_lisbon
     label: YBC Lisbon · річниця 08.11.2026

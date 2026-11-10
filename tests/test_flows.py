@@ -17,7 +17,7 @@ async def test_plain_start(env, content):
     await dp.feed_update(bot, msg("/start"))
     m = session.to(CLIENT.id)[-1]
     assert m.text == content.screens["direct"].text
-    assert labels(m)[0] == content.buttons.photos and labels(m)[-1] == content.buttons.consult
+    assert content.buttons.photos not in labels(m) and content.buttons.consult not in labels(m)
     assert session.to(MANAGER.id) == []  # plain /start is not a lead card (as before)
 
 
@@ -34,10 +34,14 @@ async def test_ybc_qr_shows_event_screen_and_notifies_ksenia(env, content):
     assert journal(storage, "inbox.jsonl")[-1]["event"] == "deeplink_start"
 
 
-async def test_iam_qr_for_tomorrow(env, content):
+async def test_photos_and_consult_only_on_ybc(env, content):
     dp, bot, session, storage = env
-    await dp.feed_update(bot, msg("/start iam_lisbon"))
-    assert session.to(CLIENT.id)[-1].text == content.screens["iam"].text
+    for param, key in (("iam_lisbon", "iam"), ("relocate", "relocate"),
+                       ("hayat_webinar_13jun", "hayat")):
+        await dp.feed_update(bot, msg(f"/start {param}"))
+        m = session.to(CLIENT.id)[-1]
+        assert m.text == content.screens[key].text
+        assert content.buttons.photos not in labels(m) and content.buttons.consult not in labels(m)
 
 
 async def test_photos_button(env, content):
