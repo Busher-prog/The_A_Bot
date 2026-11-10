@@ -5,13 +5,14 @@
 # What it does:
 #   1. shows programs that look like the old bot, backs up its folder and stops it (asks first)
 #   2. installs git + python, creates system user "thea"
-#   3. creates a read-only GitHub deploy key and waits until you add it to the repo
+#   3. checks access to GitHub (public repo: nothing to do; private: deploy key)
 #   4. downloads the code to /opt/the-a-bot and installs dependencies
 #   5. asks for the bot token and the manager's Telegram ID, writes /opt/the-a-bot/.env
 #   6. installs the systemd service: the bot starts now, after crashes and after reboots
 set -euo pipefail
 
-REPO="git@github.com:Busher-prog/The_A_Bot.git"
+REPO_HTTPS="https://github.com/Busher-prog/The_A_Bot.git"
+REPO_SSH="git@github.com:Busher-prog/The_A_Bot.git"
 APP=/opt/the-a-bot
 SVC=the-a-bot
 APP_USER=thea
@@ -59,23 +60,28 @@ python3 -c 'import sys; assert sys.version_info >= (3, 10), sys.version' \
   || { echo "Нужен Python 3.10+, на сервере: $(python3 --version)"; exit 1; }
 id "$APP_USER" &>/dev/null || useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
 
-# --- 3. Deploy key ----------------------------------------------------------
-say "3/6 Ключ доступа к GitHub"
-HOME_DIR=$(getent passwd "$APP_USER" | cut -d: -f6)
-install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$HOME_DIR/.ssh"
-[[ -f "$HOME_DIR/.ssh/id_ed25519" ]] || sudo -u "$APP_USER" ssh-keygen -q -t ed25519 -N "" -C "the-a-bot-server" -f "$HOME_DIR/.ssh/id_ed25519"
-ssh-keyscan -t ed25519 github.com 2>/dev/null | sudo -u "$APP_USER" tee "$HOME_DIR/.ssh/known_hosts" >/dev/null
-
-until sudo -u "$APP_USER" git ls-remote "$REPO" &>/dev/null; do
-  echo
-  echo "Добавьте этот ключ на GitHub:"
-  echo "  github.com/Busher-prog/The_A_Bot → Settings → Deploy keys → Add deploy key"
-  echo "  Title: server, Key: строка ниже, галочку «Allow write access» НЕ ставить"
-  echo
-  cat "$HOME_DIR/.ssh/id_ed25519.pub"
-  echo
-  ask "Когда добавите — нажмите Enter" >/dev/null
-done
+# --- 3. Access to GitHub ---------------------------------------------------
+say "3/6 Доступ к GitHub"
+if git ls-remote "$REPO_HTTPS" &>/dev/null; then
+  REPO="$REPO_HTTPS"   # public repository: no key needed
+  echo "Репозиторий публичный, ключ не нужен."
+else
+  REPO="$REPO_SSH"
+  HOME_DIR=$(getent passwd "$APP_USER" | cut -d: -f6)
+  install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$HOME_DIR/.ssh"
+  [[ -f "$HOME_DIR/.ssh/id_ed25519" ]] || sudo -u "$APP_USER" ssh-keygen -q -t ed25519 -N "" -C "the-a-bot-server" -f "$HOME_DIR/.ssh/id_ed25519"
+  ssh-keyscan -t ed25519 github.com 2>/dev/null | sudo -u "$APP_USER" tee "$HOME_DIR/.ssh/known_hosts" >/dev/null
+  until sudo -u "$APP_USER" git ls-remote "$REPO" &>/dev/null; do
+    echo
+    echo "Репозиторий приватный. Добавьте этот ключ на GitHub:"
+    echo "  github.com/Busher-prog/The_A_Bot → Settings → Deploy keys → Add deploy key"
+    echo "  Title: server, Key: строка ниже, галочку «Allow write access» НЕ ставить"
+    echo
+    cat "$HOME_DIR/.ssh/id_ed25519.pub"
+    echo
+    ask "Когда добавите — нажмите Enter" >/dev/null
+  done
+fi
 echo "Доступ к репозиторию есть."
 
 # --- 4. Code ----------------------------------------------------------------
