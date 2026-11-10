@@ -1,32 +1,51 @@
-"""Start screens, topic screens, photo album."""
+"""Start screens (incl. QR deep links), topics, photos, info commands."""
 
-from aiogram import F, Router
+import logging
+
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.config import Settings
 from bot.content import Content
-from bot.keyboards import Menu, main_menu, photos_menu, topic_menu
+from bot.formatting import event_card, new_lead_card
+from bot.handlers import calculator, forms
+from bot.keyboards import photos_menu, start_menu, topic_menu
+from bot.notify import to_manager
+from bot.storage import Storage, now_iso
+
+log = logging.getLogger(__name__)
 
 router = Router(name="menu")
 router.message.filter(F.chat.type == "private")
 
 
-async def show_home(message: Message, state: FSMContext, content: Content,
-                    screen: str | None = None) -> None:
-    """Show a start screen. Without `screen`, reuse the one this client came from."""
-    if screen is None:
-        screen = (await state.get_data()).get("screen")
+async def show_screen(message: Message, content: Content, screen: str) -> None:
     key, item = content.screen(screen)
-    await state.clear()
-    await state.update_data(screen=key)
-    await message.answer(item.text, reply_markup=main_menu(content, key))
+    await message.answer(item.text, reply_markup=start_menu(content, key))
 
 
 @router.message(CommandStart())
-async def start(message: Message, command: CommandObject, state: FSMContext, content: Content) -> None:
-    # t.me/<bot>?start=ybc arrives as "/start ybc"
-    await show_home(message, state, content, command.args or "default")
+async def start(message: Message, command: CommandObject, state: FSMContext, bot: Bot,
+                content: Content, settings: Settings, db: Storage) -> None:
+    await state.clear()
+    user = message.from_user
+    key, screen = content.screen_by_start_param(command.args)
+    if screen.start_param:  # came by a QR code / link: remember where from
+        db.touch_user(user, source=screen.start_param, source_label=screen.label,
+                           source_at=now_iso())
+        event = "deeplink_start"
+    else:
+        db.touch_user(user)
+        event = "plain_start"
+    db.append("inbox.jsonl", {"event": event, "source": screen.start_param or "direct",
+                                   "chat_id": message.chat.id, "user_id": user.id,
+                                   "username": user.username, "first_name": user.first_name})
+    await show_screen(message, content, key)
+    if screen.start_param:
+        text, markup = new_lead_card(screen.label, user, message.chat.id, db)
+        await to_manager(bot, settings, message.chat.id, text, markup)
 
 
 @router.message(Command("myid"))
@@ -34,25 +53,53 @@ async def my_id(message: Message) -> None:
     await message.answer(f"Chat ID: <code>{message.chat.id}</code>")
 
 
-@router.callback_query(Menu.filter(F.action == "home"))
-async def home(callback: CallbackQuery, callback_data: Menu, state: FSMContext, content: Content) -> None:
-    await show_home(callback.message, state, content, callback_data.screen)
-    await callback.answer()
+@router.message(Command("services", "jurisdictions", "contact", "help"))
+async def info_command(message: Message, command: CommandObject, content: Content) -> None:
+    await message.answer(content.commands_text[command.command], disable_web_page_preview=True)
 
 
-@router.callback_query(Menu.filter(F.action == "photos"))
-async def photos(callback: CallbackQuery, callback_data: Menu, content: Content) -> None:
-    await callback.message.answer(content.photos.text, reply_markup=photos_menu(content, callback_data.screen))
-    await callback.answer()
+# --- inline buttons: "src:<screen>:<action>" ----------------------------------------
+
+def parse_src(data: str) -> tuple[str, str] | None:
+    parts = data.split(":")
+    return (parts[1], parts[2]) if len(parts) == 3 and parts[0] == "src" else None
 
 
-@router.callback_query(Menu.filter(F.action == "topic"))
-async def topic(callback: CallbackQuery, callback_data: Menu, state: FSMContext, content: Content) -> None:
-    item = content.topic(callback_data.topic or "")
-    if item is None:  # button from an old message whose topic was removed
-        await show_home(callback.message, state, content, callback_data.screen)
-    else:
-        await state.update_data(topic=item.button)
-        await callback.message.answer(item.text,
-                                      reply_markup=topic_menu(content, item.id, callback_data.screen))
+@router.callback_query(F.data.startswith("src:"))
+async def src_button(callback: CallbackQuery, state: FSMContext, bot: Bot, content: Content,
+                     settings: Settings, db: Storage) -> None:
+    parsed = parse_src(callback.data)
+    if not parsed:
+        await callback.answer()
+        return
+    screen, action = parsed
+    screen, screen_cfg = content.screen(screen)
+    user, chat_id = callback.from_user, callback.message.chat.id
+    db.append("inbox.jsonl", {"event": "source_button", "source": screen, "action": action,
+                                   "chat_id": chat_id, "user_id": user.id,
+                                   "username": user.username})
+    group = content.group_of(screen)
+
+    if action == "calc":
+        await calculator.begin(callback.message, state)
+    elif action in ("consult", "lead_start") or action.startswith("form_"):
+        form = {"consult": "consult", "lead_start": "hayat"}.get(action, action[5:])
+        await forms.begin(callback.message, state, content, form)
+    elif action in ("photos", "seg_collection"):  # the old raffle button now opens the photos
+        await callback.message.answer(content.photos.text, reply_markup=photos_menu(content, screen))
+    elif action.startswith("seg_") and action[4:] in group.topics:
+        topic = group.topics[action[4:]]
+        db.touch_user(user, last_topic=topic.label, **{f"{screen}_segment": action[4:],
+                                                            f"{screen}_segment_label": topic.label})
+        await callback.message.answer(topic.text, reply_markup=topic_menu(content, screen))
+        text, markup = event_card(screen_cfg.lead_title, f"выбрал тему: {topic.label}",
+                                  user, chat_id, db)
+        await to_manager(bot, settings, chat_id, text, markup)
+    elif action == "discuss":
+        await callback.message.answer(group.discuss_text or content.replies.ack_work)
+        text, markup = event_card(screen_cfg.lead_title, "натиснув «написати менеджеру»",
+                                  user, chat_id, db)
+        await to_manager(bot, settings, chat_id, text, markup)
+    else:  # "menu" and anything unknown: back to the start screen
+        await show_screen(callback.message, content, screen)
     await callback.answer()

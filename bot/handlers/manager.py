@@ -1,9 +1,9 @@
-"""Two-way chat between clients and managers.
+"""Client ↔ manager.
 
-- Any free-form message a client sends is forwarded to the managers chat.
-- A manager answers by replying (Telegram "Reply") to that message; the bot
-  delivers the answer to the client.
-- The managers chat can be a manager's private chat with the bot or a group.
+- Anything a client writes (not a command, not inside a questionnaire) gets an
+  automatic reply (working hours aware) and is sent to the manager as a card.
+- The manager answers with Telegram "Reply" on a card: the bot delivers the answer.
+- The manager's other messages: edit feedback for posts, photos for Claude.
 """
 
 import logging
@@ -12,84 +12,88 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 
 from bot.config import Settings
 from bot.content import Content
-from bot.formatting import client_message_header, extract_client_id
-from bot.handlers.menu import show_home
-from bot.keyboards import Menu
+from bot.formatting import extract_client_id, is_working_hours, message_card
+from bot.handlers.menu import show_screen
+from bot.handlers.posts import capture_edit_feedback, save_manager_photo
+from bot.notify import to_manager
+from bot.storage import Storage
 
 log = logging.getLogger(__name__)
 
 router = Router(name="manager")
 
 
-@router.callback_query(Menu.filter(F.action == "manager"))
-async def write_manager(callback: CallbackQuery, callback_data: Menu, state: FSMContext,
-                        content: Content) -> None:
-    item = content.topic(callback_data.topic or "")
-    if item:
-        await state.update_data(topic=item.button)
-    await callback.message.answer(content.manager.prompt)
-    await callback.answer()
-
-
-def _from_managers_chat(message: Message, settings: Settings) -> bool:
+def _from_manager(message: Message, settings: Settings) -> bool:
     return settings.managers_chat_id is not None and message.chat.id == settings.managers_chat_id
-
-
-@router.message(_from_managers_chat, F.reply_to_message)
-async def manager_reply(message: Message, bot: Bot, settings: Settings) -> None:
-    original = message.reply_to_message
-    if original.from_user is None or original.from_user.id != bot.id:
-        return
-    client_id = extract_client_id(original.text or original.caption)
-    if client_id is None:
-        # Replying to a forwarded attachment: look one level up for the header.
-        parent = original.reply_to_message
-        client_id = extract_client_id(parent.text if parent else None)
-    if client_id is None:
-        await message.reply("⚠️ Не знайшов клієнта. Відповідайте на повідомлення з #id.")
-        return
-
-    try:
-        await message.copy_to(client_id)
-    except (TelegramForbiddenError, TelegramBadRequest) as e:
-        await message.reply(f"⚠️ Не вдалося доставити: {e.message}")
-        return
-    await message.reply("✅ Надіслано клієнту")
 
 
 def _is_command(message: Message) -> bool:
     return (message.text or "").startswith("/")
 
 
-@router.message(F.chat.type == "private", StateFilter(None), _is_command)
-async def unknown_command(message: Message, state: FSMContext, content: Content) -> None:
-    """Old commands (/services, /calculator, ...) or typos: show the menu."""
-    await show_home(message, state, content)
-
-
-@router.message(_from_managers_chat)
-async def manager_without_reply(message: Message) -> None:
-    await message.reply("ℹ️ Щоб відповісти клієнту, натисніть «Відповісти» (Reply) на його повідомлення.")
-
-
-@router.message(F.chat.type == "private", StateFilter(None), lambda m: not _is_command(m))
-async def client_message(message: Message, state: FSMContext, bot: Bot, content: Content,
-                         settings: Settings) -> None:
-    if not settings.managers_chat_id:
-        log.warning("MANAGERS_CHAT_ID is not set; message from %s dropped", message.from_user.id)
-        await message.answer(content.manager.sent)
+@router.message(_from_manager, F.reply_to_message, lambda m: not _is_command(m))
+async def manager_reply(message: Message, bot: Bot, db: Storage) -> None:
+    original = message.reply_to_message
+    client_id = extract_client_id(original.text or original.caption)
+    if client_id is None and original.reply_to_message:  # reply to an attachment under a card
+        parent = original.reply_to_message
+        client_id = extract_client_id(parent.text or parent.caption)
+    if client_id is None or original.from_user is None or original.from_user.id != bot.id:
+        if await capture_edit_feedback(message, db):
+            return
+        await message.reply("⚠️ Не знайшов клієнта. Відповідайте Reply на картку з chat_id.")
         return
+    try:
+        await message.copy_to(client_id)
+    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        await message.reply(f"⚠️ Не смог отправить клиенту (id {client_id}): {e.message}")
+        return
+    db.append("sent.jsonl", {"chat_id": client_id, "user_id": client_id,
+                                  "text": message.text or message.caption or "(вложение)",
+                                  "result": True, "via": "master_reply"})
+    await message.reply(f"✓ Отправлено клиенту (id {client_id}).")
 
-    topic = (await state.get_data()).get("topic")
-    header = client_message_header(message.from_user, topic)
-    if message.text:
-        await bot.send_message(settings.managers_chat_id, f"{header}\n\n{message.html_text}")
-    else:
-        # Photos, files, voice notes: header first, attachment as a reply to it.
-        sent = await bot.send_message(settings.managers_chat_id, header)
-        await message.copy_to(settings.managers_chat_id, reply_to_message_id=sent.message_id)
-    await message.answer(content.manager.sent)
+
+@router.message(_from_manager, lambda m: not _is_command(m))
+async def manager_message(message: Message, bot: Bot, db: Storage) -> None:
+    if await capture_edit_feedback(message, db):
+        return
+    if await save_manager_photo(message, bot, db):
+        return
+    await message.reply("ℹ️ Щоб відповісти клієнту, натисніть «Відповісти» (Reply) на його картку.")
+
+
+@router.message(F.chat.type == "private", StateFilter(None), _is_command)
+async def unknown_command(message: Message, state: FSMContext, content: Content,
+                          db: Storage) -> None:
+    """Typos and commands that no longer exist: show the menu the person came from."""
+    source = db.user(message.from_user.id).get("source")
+    key, _ = content.screen_by_start_param(source)
+    await show_screen(message, content, key)
+
+
+@router.message(F.chat.type == "private", StateFilter(None))
+async def client_message(message: Message, bot: Bot, content: Content, settings: Settings,
+                         db: Storage) -> None:
+    user = message.from_user
+    text = message.text or message.caption or ""
+    db.touch_user(user)
+    db.append("inbox.jsonl", {
+        "chat_id": message.chat.id, "user_id": user.id, "username": user.username,
+        "first_name": user.first_name, "last_name": user.last_name,
+        "language_code": user.language_code, "text": text,
+    })
+    ack = content.replies.ack_work if is_working_hours(content) else content.replies.ack_off
+    await message.answer(ack)
+    db.append("sent.jsonl", {"chat_id": message.chat.id, "user_id": user.id,
+                                  "text": ack, "result": True})
+
+    body = message.html_text if message.text else (message.html_text if message.caption else "")
+    card, markup = message_card(content, user, message.chat.id, body, db)
+    card_id = await to_manager(bot, settings, message.chat.id, card, markup)
+    if card_id and not message.text:  # photo, file, voice: send it under the card
+        await message.copy_to(settings.managers_chat_id, reply_to_message_id=card_id)

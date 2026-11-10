@@ -12,8 +12,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
 
     bot_token: SecretStr
-    # Chat (person or group) where client messages and consultation requests arrive.
+    # Manager's chat: client messages, lead cards and form answers arrive here.
     # Send /myid to the bot from that chat to find the number.
     managers_chat_id: int | None = None
     texts_path: Path = ROOT / "content" / "texts.yaml"
+    # Journals (inbox, leads) and the list of users. On the server: the old bot's folder.
+    data_dir: Path = ROOT / "data"
     log_level: str = "INFO"
