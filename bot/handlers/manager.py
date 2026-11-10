@@ -16,7 +16,8 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import Settings
 from bot.content import Content
 from bot.formatting import client_message_header, extract_client_id
-from bot.keyboards import Menu, main_menu
+from bot.handlers.menu import show_home
+from bot.keyboards import Menu
 
 log = logging.getLogger(__name__)
 
@@ -38,9 +39,9 @@ def _is_command(message: Message) -> bool:
 
 
 @router.message(F.chat.type == "private", StateFilter(None), _is_command)
-async def unknown_command(message: Message, content: Content) -> None:
+async def unknown_command(message: Message, state: FSMContext, content: Content) -> None:
     """Old commands (/services, /calculator, ...) or typos: show the menu."""
-    await message.answer(content.welcome, reply_markup=main_menu(content))
+    await show_home(message, state, content)
 
 
 @router.message(F.chat.type == "private", StateFilter(None), lambda m: not _is_command(m))

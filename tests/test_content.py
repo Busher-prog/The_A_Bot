@@ -7,17 +7,26 @@ def test_texts_file_is_valid(content):
     assert "{name}" in content.consultation.ask_contact
 
 
-def test_menu_order_photos_first_consultation_last(content):
-    rows = main_menu(content).inline_keyboard
-    labels = [row[0].text for row in rows]
+def test_default_menu_photos_first_consultation_last(content):
+    labels = [row[0].text for row in main_menu(content).inline_keyboard]
     assert labels[0] == content.photos.button
     assert labels[1:-1] == [t.button for t in content.topics]
     assert labels[-1] == content.consultation.button
 
 
 def test_callback_data_fits_telegram_limit(content):
-    for row in main_menu(content).inline_keyboard:
-        assert len(row[0].callback_data.encode()) <= 64
+    for name in content.start_screens:
+        for row in main_menu(content, name).inline_keyboard:
+            assert len(row[0].callback_data.encode()) <= 64
+
+
+def test_unknown_button_in_screen_is_rejected(content):
+    import pytest
+    from bot.content import Content
+    data = content.model_dump(mode="json")
+    data["start_screens"]["default"]["buttons"].append({"id": "lottery"})
+    with pytest.raises(ValueError, match="lottery"):
+        Content.model_validate(data)
 
 
 def test_extract_client_id():

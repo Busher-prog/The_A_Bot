@@ -11,7 +11,8 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from bot.config import Settings
 from bot.content import Content
 from bot.formatting import consultation_lead
-from bot.keyboards import Menu, cancel_keyboard, contact_keyboard, main_menu
+from bot.handlers.menu import show_home
+from bot.keyboards import Menu, cancel_keyboard, contact_keyboard
 
 log = logging.getLogger(__name__)
 
@@ -44,9 +45,8 @@ async def begin_from_command(message: Message, state: FSMContext, content: Conte
 @router.message(StateFilter(Form), lambda m, content: m.text == content.buttons.cancel)
 @router.message(StateFilter(Form), Command("cancel"))
 async def cancel(message: Message, state: FSMContext, content: Content) -> None:
-    await state.clear()
     await message.answer(content.consultation.cancelled, reply_markup=ReplyKeyboardRemove())
-    await message.answer(content.welcome, reply_markup=main_menu(content))
+    await show_home(message, state, content)
 
 
 @router.message(Form.name, F.text)
@@ -78,6 +78,5 @@ async def got_question(
     else:
         log.warning("MANAGERS_CHAT_ID is not set; lead only logged:\n%s", lead)
 
-    await state.clear()
     await message.answer(content.consultation.done, reply_markup=ReplyKeyboardRemove())
-    await message.answer(content.welcome, reply_markup=main_menu(content))
+    await show_home(message, state, content)
