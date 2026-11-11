@@ -500,3 +500,11 @@ async def test_bingo_participant_numbers_are_permanent(env, content):
         assert [b.text for b in buttons_of(q2)] == ["1", "2", "3"]
     finally:
         content.bingo.draw_count = 7
+
+
+async def test_manager_can_play_as_participant(env, content):
+    """On the test bot the tester is also the manager: he must be able to go through the bingo."""
+    dp, bot, session, storage = env
+    await play(dp, bot, MANAGER, "Тестер", yes_with_story=(0,))
+    p = storage.get_state("bingo")[str(MANAGER.id)]
+    assert p["name"] == "Тестер" and p["stories"]["1"] and p["final"] == "Бублик" and p["done_at"]
