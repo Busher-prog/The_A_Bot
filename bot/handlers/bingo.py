@@ -9,7 +9,7 @@ Manager (Ksenia), all in the bot:
   - /gift Name Surname: a gift "from THE A" (before the draw).
 Prize pools (texts.yaml → bingo.prizes):
   draw  — random among all registered participants who have no gift yet;
-  best  — Ksenia's choice for the best stories (up to best_limit);
+  best  — Ksenia's choice: one gift per question with stories, one per person;
   final — random among everyone who answered the final question; leftovers of "best" go here too.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
 """
@@ -105,7 +105,7 @@ async def ask(message: Message, state: FSMContext, content: Content, q: int) -> 
     if q < total:
         await state.set_state(None)
         await message.answer(
-            f"{b.question_header.format(n=q + 1, total=total)}\n\n«{escape(b.questions[q])}»",
+            f"{b.question_header.format(n=q + 1, total=total)}\n\n«{escape(b.questions[q].text)}»",
             reply_markup=kb([(b.yes_button, f"bingo:ans:{q}:y")], [(b.no_button, f"bingo:ans:{q}:n")]))
     else:
         await state.set_state(BingoState.final)
@@ -153,7 +153,7 @@ async def got_answer(callback: CallbackQuery, state: FSMContext, content: Conten
             reply_markup=None)
     except Exception:
         pass
-    if yn == "y":
+    if yn == "y" and b.questions[q].story:
         await state.set_state(BingoState.story)
         await state.update_data(bingo_q=q)
         await callback.message.answer(b.story_prompt, reply_markup=kb([(b.skip_button, f"bingo:skip:{q}")]))
@@ -184,10 +184,10 @@ async def got_story(message: Message, state: FSMContext, bot: Bot, content: Cont
     story = message.text.strip()
     p["stories"][str(q + 1)] = story
     save_player(db, user.id, p)
-    db.append("bingo.jsonl", {"event": "story", "q": q + 1, "question": content.bingo.questions[q],
+    db.append("bingo.jsonl", {"event": "story", "q": q + 1, "question": content.bingo.questions[q].text,
                               "text": story, "name": p["name"], "user_id": user.id,
                               "username": user.username})
-    card = (f"📝 Питання {q + 1} · «{escape(content.bingo.questions[q])}»\n\n"
+    card = (f"📝 Питання {q + 1} · «{escape(content.bingo.questions[q].text)}»\n\n"
             f"<b>{escape(p['name'])}</b>: «{escape(story)}»\n\n"
             f"Telegram: {'@' + user.username if user.username else 'username не задан'} · chat_id: {user.id}")
     await to_manager(bot, settings, message.chat.id, card,
@@ -232,9 +232,11 @@ def status_text(content: Content, db: Storage) -> str:
              f"Подаровано за історії: {best_given} з {content.bingo.best_limit}", "",
              "<b>Залишилось подарунків:</b>"]
     lines += [f"• {escape(p.label)}: {left(db, content, p.id)} з {p.qty}" for p in content.bingo.prizes]
-    per_q = [sum(1 for p in named if str(i + 1) in p["stories"]) for i in range(len(content.bingo.questions))]
-    lines += ["", "<b>Історій по питаннях</b> (/bingo_answers N - прочитати):",
-              " · ".join(f"{i + 1}: {n}" for i, n in enumerate(per_q))]
+    best_q = {a.get("q") for a in awards(db) if a["pool"] == "best"}
+    per_q = [(i + 1, sum(1 for p in named if str(i + 1) in p["stories"]))
+             for i, qq in enumerate(content.bingo.questions) if qq.story]
+    lines += ["", "<b>Історій по питаннях</b> (🏆 - подарунок уже є; /bingo_answers N - прочитати):",
+              " · ".join(f"{n}: {c}{' 🏆' if n in best_q else ''}" for n, c in per_q)]
     return "\n".join(lines)
 
 
@@ -285,7 +287,7 @@ async def answers_command(message: Message, command: CommandObject, content: Con
         return
     rows = [(p["name"], p["stories"][str(q)]) for p in players(db).values()
             if p.get("name") and str(q) in p["stories"]]
-    chunk = f"<b>Питання {q} · «{escape(content.bingo.questions[q - 1])}»</b> - {len(rows)} історій\n"
+    chunk = f"<b>Питання {q} · «{escape(content.bingo.questions[q - 1].text)}»</b> - {len(rows)} історій\n"
     for name, story in rows:
         line = f"\n<b>{escape(name)}</b>: «{escape(story)}»\n"
         if len(chunk) + len(line) > 3800:
@@ -352,6 +354,9 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         if any(a["pool"] == "best" and str(a.get("user_id")) == uid for a in awards(db)):
             await callback.answer("Ця людина вже отримала подарунок за історію.", show_alert=True)
             return
+        if any(a["pool"] == "best" and a.get("q") == q + 1 for a in awards(db)):
+            await callback.answer(f"За питання {q + 1} подарунок уже є (один на питання).", show_alert=True)
+            return
         rows = [[(f"{p.label} ({left(db, content, p.id)})", f"bingo:bestgive:{uid}:{q}:{p.id}")]
                 for p in content.bingo.prizes if p.pool == "best" and left(db, content, p.id) > 0]
         if not rows:
@@ -367,8 +372,9 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         if not p or left(db, content, prize_id) <= 0:
             await callback.answer("Цей подарунок закінчився.", show_alert=True)
             return
-        if any(a["pool"] == "best" and str(a.get("user_id")) == uid for a in awards(db)):
-            await callback.answer("Вже подаровано.", show_alert=True)
+        if any(a["pool"] == "best" and (str(a.get("user_id")) == uid or a.get("q") == q + 1)
+               for a in awards(db)):
+            await callback.answer("Вже подаровано (одна людина / одне питання - один подарунок).", show_alert=True)
             return
         add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "best", "q": q + 1})
         await callback.answer("🏆 Готово")

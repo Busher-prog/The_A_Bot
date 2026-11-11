@@ -74,6 +74,16 @@ class Prize(BaseModel):
     pool: Literal["draw", "best", "final"]
 
 
+class BingoQuestion(BaseModel):
+    text: str
+    story: bool = True  # ask for a detailed story after "yes"
+
+    @model_validator(mode="before")
+    @classmethod
+    def from_string(cls, value):
+        return {"text": value} if isinstance(value, str) else value
+
+
 class Bingo(BaseModel):
     button: str
     intro: str
@@ -83,12 +93,16 @@ class Bingo(BaseModel):
     question_header: str
     story_prompt: str
     skip_button: str
-    questions: list[str] = Field(min_length=1)
+    questions: list[BingoQuestion] = Field(min_length=1)
     final_question: str
     done: str
     already_done: str
-    best_limit: int = 9
     prizes: list[Prize]
+
+    @property
+    def best_limit(self) -> int:
+        """One gift per question with stories."""
+        return sum(1 for q in self.questions if q.story)
 
     def prize(self, prize_id: str) -> Prize | None:
         return next((p for p in self.prizes if p.id == prize_id), None)

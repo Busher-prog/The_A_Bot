@@ -280,7 +280,7 @@ async def test_bingo_prizes_and_final_list(env, content):
     dp, bot, session, storage = env
     guests = [bingo_user(n) for n in range(15)]
     for n, g in enumerate(guests):
-        await play(dp, bot, g, f"Гість {n}", yes_with_story=(0,) if n < 3 else (),
+        await play(dp, bot, g, f"Гість {n}", yes_with_story=(n,) if n < 3 else (),
                    final="Бублик" if n < 12 else None)
 
     # Ksenia: 2 best stories (one mat, one bag)
@@ -288,8 +288,10 @@ async def test_bingo_prizes_and_final_list(env, content):
     choice = session.to(MANAGER.id)[-1]
     assert [r[0].text for r in choice.reply_markup.inline_keyboard][:2] == ["Мат для йоги (5)", "Спортивна сумка (5)"]
     await dp.feed_update(bot, press(f"bingo:bestgive:{guests[0].id}:0:yoga_mat", user=MANAGER))
-    await dp.feed_update(bot, press(f"bingo:bestgive:{guests[1].id}:0:sport_bag", user=MANAGER))
-    await dp.feed_update(bot, press(f"bingo:bestgive:{guests[1].id}:0:yoga_mat", user=MANAGER))  # 2nd for same: no
+    await dp.feed_update(bot, press(f"bingo:bestgive:{guests[1].id}:1:sport_bag", user=MANAGER))
+    await dp.feed_update(bot, press(f"bingo:bestgive:{guests[1].id}:2:yoga_mat", user=MANAGER))  # same person: no
+    await dp.feed_update(bot, press(f"bingo:bestgive:{guests[2].id}:0:yoga_mat", user=MANAGER))  # same question: no
+    assert len([a for a in storage.get_state("bingo_awards") if a["pool"] == "best"]) == 2
 
     # a gift "from THE A"
     await dp.feed_update(bot, msg("/gift Марія Шевченко", user=MANAGER))
@@ -311,7 +313,7 @@ async def test_bingo_prizes_and_final_list(env, content):
     report = session.to(MANAGER.id)[-1].text
     assert report.startswith("<b>🏆 Бізнес-бінго · переможці</b>")
     for part in ("🎲 Розіграш", "🎁 Від THE A", "Марія Шевченко - Футболка", "📝 Найкращі історії",
-                 "Гість 0 - Мат для йоги (питання 1)", "🏁 Фінальний розіграш", "Структурний аудит",
+                 "Гість 0 - Мат для йоги (питання 1)", "Гість 1 - Спортивна сумка (питання 2)", "🏁 Фінальний розіграш", "Структурний аудит",
                  "улюбленець: Бублик"):
         assert part in report
 
@@ -339,3 +341,17 @@ async def test_bingo_manager_buttons_only_for_manager(env):
     await play(dp, bot, CLIENT, "Олена")
     await dp.feed_update(bot, press("bingo:draw"))
     assert storage.get_state("bingo_awards") is None
+
+
+async def test_bingo_question_without_story(env, content):
+    """story: false → after ✅ the bot goes straight to the next question; fewer gifts for stories."""
+    dp, bot, session, storage = env
+    content.bingo.questions[0].story = False
+    try:
+        assert content.bingo.best_limit == 8
+        await dp.feed_update(bot, press("src:iam:bingo"))
+        await dp.feed_update(bot, msg("Олена"))
+        await dp.feed_update(bot, press("bingo:ans:0:y"))
+        assert "Питання 2 з 9" in session.to(CLIENT.id)[-1].text
+    finally:
+        content.bingo.questions[0].story = True
