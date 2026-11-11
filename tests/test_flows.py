@@ -335,11 +335,11 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
     start = session.to(MANAGER.id)[-1]
     assert [b.text for b in buttons_of(start)] == ["▶️ Почати"]
 
+    before = len(session.to(MANAGER.id))
     await dp.feed_update(bot, press("bingo:start", user=MANAGER))
-    sent = session.to(MANAGER.id)
-    draw_msg = next(m for m in sent if "Розіграш кепок і футболок" in m.text)
-    assert draw_msg.text.count("•") == 7 and draw_msg.reply_markup is None
-    q1 = sent[-1]
+    assert len(session.to(MANAGER.id)) == before + 1  # no draw results message, straight to question 1
+    assert sum(1 for a in storage.get_state("bingo_awards") if a["pool"] == "draw") == 7
+    q1 = session.to(MANAGER.id)[-1]
     assert "Питання 1" in q1.text and "Відповідей: 20" in q1.text
     assert all(b.text.isdigit() for b in buttons_of(q1))  # only numbers, nothing else
 
@@ -351,6 +351,8 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
         assert lst.text.count("</b> 🎲:") + lst.text.count("</b> 🎁:") >= 7  # draw winners: marked, allowed
         await dp.feed_update(bot, press(free_button(lst).callback_data, user=MANAGER))
 
+    lists = session.to(MANAGER.id)[before:]
+    assert all("питання" in m.text.lower() for m in lists)  # only answer lists, no intermediate results
     pets = session.to(MANAGER.id)[-1]  # the pet question: the manager picks too
     assert "Фінальне питання" in pets.text and "Відповідей: 15" in pets.text
     assert all(b.text.isdigit() for b in buttons_of(pets))
@@ -473,3 +475,22 @@ async def test_bingo_draw_winner_can_still_win(env, content):
     assert pools == ["draw", "best"]
     pets = session.to(MANAGER.id)[-1]  # answer winner is blocked on the pet question
     assert "<b>1. Гість 0</b> 🎁:" in pets.text and "пропустити" in buttons_of(pets)[-1].text
+
+
+async def test_bingo_participant_numbers_are_permanent(env, content):
+    dp, bot, session, storage = env
+    content.bingo.draw_count = 0
+    try:
+        await play(dp, bot, bingo_user(1), "Анна", yes_with_story=(0, 1))
+        await play(dp, bot, bingo_user(2), "Катя Бондар", yes_with_story=(0, 1))
+        await play(dp, bot, bingo_user(3), "Олег", yes_with_story=(1,))  # no answer to question 1
+        await dp.feed_update(bot, press("bingo:start", user=MANAGER))
+        q1 = session.to(MANAGER.id)[-1]
+        assert "<b>1. Анна</b>" in q1.text and "<b>2. Катя Бондар</b>" in q1.text and "Олег" not in q1.text
+        assert [b.text for b in buttons_of(q1)] == ["1", "2"]
+        await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(1).id}:1", user=MANAGER))
+        q2 = session.to(MANAGER.id)[-1]
+        assert "<b>2. Катя Бондар</b>" in q2.text and "<b>3. Олег</b>" in q2.text  # same numbers
+        assert [b.text for b in buttons_of(q2)] == ["1", "2", "3"]
+    finally:
+        content.bingo.draw_count = 7

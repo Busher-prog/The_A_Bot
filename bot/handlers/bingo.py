@@ -203,10 +203,10 @@ async def got_final(message: Message, state: FSMContext, content: Content, db: S
 # --- manager side ---------------------------------------------------------------------------------
 #
 # Flow for Ksenia — as few buttons as possible:
-#   /bingo → [▶️ Почати] → random draw of draw_count caps / t-shirts (one text message)
+#   /bingo → [▶️ Почати] → random draw of draw_count caps / t-shirts (silently)
 #   → question 1: one message with all answers, buttons are only the numbers
-#   → she taps a number: the winner gets a mat or a bag (whatever is left) → question 2 … → question 9
-#   → the pet question: same list, she picks → the audit (nothing physical) → the final list for the stage.
+#   → she taps a number (= the participant's permanent number): mat or bag → question 2 … → question 9
+#   → the pet question: same list, she picks → the audit → ONLY NOW the final list (no messages in between).
 
 def is_manager(user_id: int, settings: Settings) -> bool:
     return settings.managers_chat_id is not None and user_id == settings.managers_chat_id
@@ -240,8 +240,16 @@ def give_final(content: Content, db: Storage, uid: str) -> None:
         add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "final"})
 
 
+def participant_numbers(db: Storage) -> dict[str, int]:
+    """Permanent number of every participant: order of registration (who wrote the name first)."""
+    named = [(p.get("registered_at") or "", uid) for uid, p in players(db).items() if p.get("name")]
+    return {uid: n for n, (_, uid) in enumerate(sorted(named), 1)}
+
+
 def answers_for(db: Storage, q: int) -> list[tuple[str, dict]]:
-    return [(uid, p) for uid, p in players(db).items() if p.get("name") and str(q) in p["stories"]]
+    nums = participant_numbers(db)
+    rows = [(uid, p) for uid, p in players(db).items() if p.get("name") and str(q) in p["stories"]]
+    return sorted(rows, key=lambda r: nums[r[0]])
 
 
 # Who may still be chosen. Change BLOCKING_POOLS to change the rule:
@@ -283,12 +291,14 @@ async def show_next(message: Message, content: Content, db: Storage) -> None:
         return
     if not any(a["pool"] == "final" for a in awards(db)) and not db.get_state("bingo_final_skipped"):
         # 10th question: the manager picks too
-        rows = [(uid, p) for uid, p in players(db).items() if p.get("final")]
+        nums = participant_numbers(db)
+        rows = sorted(((uid, p) for uid, p in players(db).items() if p.get("final") and uid in nums),
+                      key=lambda r: nums[r[0]])
         if rows:
             await send_list(message, f"<b>Фінальне питання · «Як звали вашого улюбленця?»</b>\n"
                                      f"Відповідей: {len(rows)}. Натисніть номер найкращої 👇",
                             [(uid, p["final"]) for uid, p in rows], [p["name"] for _, p in rows], "final",
-                            *marks_of(content, db))
+                            *marks_of(content, db), participant_numbers(db))
             return
     db.set_state("bingo_finished", True)
     await message.answer(final_list(content, db))
@@ -299,11 +309,11 @@ async def send_answers(message: Message, content: Content, db: Storage, q: int,
     head = (f"<b>Питання {q} · «{escape(content.bingo.questions[q - 1].text)}»</b>\n"
             f"Відповідей: {len(rows)}. Натисніть номер найкращої 👇")
     await send_list(message, head, [(uid, p["stories"][str(q)]) for uid, p in rows],
-                    [p["name"] for _, p in rows], str(q), *marks_of(content, db))
+                    [p["name"] for _, p in rows], str(q), *marks_of(content, db), participant_numbers(db))
 
 
 async def send_list(message: Message, head: str, answers: list[tuple[str, str]], names: list[str],
-                    tag: str, blocked: dict[str, str], drawn: set[str]) -> None:
+                    tag: str, blocked: dict[str, str], drawn: set[str], nums: dict[str, int]) -> None:
     """Numbered "N. Name: answer" list; the only buttons are the numbers (bingo:pick:<uid>:<tag>).
     🎁 = already won with an answer (can't be chosen), 🎲 = won the random draw (can be chosen).
     If nobody can be chosen, a skip button is added."""
@@ -315,7 +325,8 @@ async def send_list(message: Message, head: str, answers: list[tuple[str, str]],
     if legend:
         head += "\n" + "\n".join(legend)
     parts, chunk, buttons = [], head + "\n", []
-    for n, ((uid, answer), name) in enumerate(zip(answers, names), 1):
+    for (uid, answer), name in zip(answers, names):
+        n = nums[uid]  # the participant's permanent number
         answer = answer if len(answer) <= 300 else answer[:297] + "…"
         mark = " 🎁" if uid in blocked else (" 🎲" if uid in drawn else "")
         line = f"\n<b>{n}. {escape(name)}</b>{mark}: {escape(answer)}"
@@ -418,9 +429,7 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
             await show_next(msg, content, db)
             return
         db.set_state("bingo_started", True)
-        won = run_draw(content, db)
-        await msg.answer("🎲 <b>Розіграш кепок і футболок:</b>\n"
-                         + ("\n".join(f"• {escape(n)} - {escape(l)}" for n, l in won) or "немає учасників"))
+        run_draw(content, db)  # silently: results only in the final list
         await show_next(msg, content, db)
         return
 
@@ -465,9 +474,9 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         return
 
     p = players(db)[uid]
-    if tag == "final":  # the best pet answer: audit + leftover mat / bag
+    if tag == "final":  # the best pet answer: the audit
         give_final(content, db, uid)
-        await callback.answer("🏆")
+        await callback.answer(f"🏆 {p['name']}")
         await close()
         await show_next(msg, content, db)
         return
@@ -479,7 +488,6 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
     q = int(tag)
     prize_id = rng.choice(items)
     add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "best", "q": q})
-    await callback.answer("🏆")
+    await callback.answer(f"🏆 {p['name']}")
     await close()
-    await msg.answer(f"🏆 Питання {q}: <b>{escape(p['name'])}</b> - {escape(content.bingo.prize(prize_id).label)}")
     await show_next(msg, content, db)
