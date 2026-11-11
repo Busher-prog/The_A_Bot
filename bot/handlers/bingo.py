@@ -5,7 +5,7 @@ Guest:  full name → 9 questions (✅ / ❌ buttons) → after ✅ a detailed s
 Manager (Ksenia), all in the bot:
   - every story arrives as "Name Surname: story" with 🏆 button → she picks a gift (best pool);
   - /bingo: status + buttons: draw caps & t-shirts, final draw, final list, undo;
-  - /bingo_answers N: all stories for question N;
+  - /bingo → question buttons → numbered list of stories with 🏆 N buttons (also /bingo_answers N);
   - /gift Name Surname: a gift "from THE A" (before the draw).
 Prize pools (texts.yaml → bingo.prizes):
   draw  — random among all registered participants who have no gift yet;
@@ -214,11 +214,50 @@ def is_manager(user_id: int, settings: Settings) -> bool:
     return settings.managers_chat_id is not None and user_id == settings.managers_chat_id
 
 
-def manager_keyboard() -> InlineKeyboardMarkup:
-    return kb([("🎲 Розіграш кепок і футболок", "bingo:draw")],
+def manager_keyboard(content: Content, db: Storage) -> InlineKeyboardMarkup:
+    named = [p for p in players(db).values() if p.get("name")]
+    best_q = {a.get("q") for a in awards(db) if a["pool"] == "best"}
+    q_buttons = []
+    for i, qq in enumerate(content.bingo.questions):
+        if qq.story:
+            n = sum(1 for p in named if str(i + 1) in p["stories"])
+            q_buttons.append((f"{'🏆' if i + 1 in best_q else '📝'} {i + 1} ({n})", f"bingo:q:{i + 1}"))
+    rows = [q_buttons[i:i + 5] for i in range(0, len(q_buttons), 5)]
+    return kb(*rows,
+              [("🎲 Розіграш кепок і футболок", "bingo:draw")],
               [("🏁 Фінальний розіграш (мат + аудит)", "bingo:final")],
               [("📋 Фінальний список для сцени", "bingo:list")],
               [("↩️ Скасувати останній подарунок", "bingo:undo")])
+
+
+async def send_answers(message: Message, content: Content, db: Storage, q: int) -> None:
+    """All stories for question q, numbered, with a 🏆 button per story."""
+    best = {a.get("q"): a for a in awards(db) if a["pool"] == "best"}
+    rows = [(uid, p) for uid, p in players(db).items() if p.get("name") and str(q) in p["stories"]]
+    head = f"<b>Питання {q} · «{escape(content.bingo.questions[q - 1].text)}»</b> - {len(rows)} історій"
+    if q in best:
+        prize = content.bingo.prize(best[q]["prize"])
+        head += f"\n🏆 Вже обрано: <b>{escape(best[q]['name'])}</b> - {escape(prize.label if prize else '')}"
+    else:
+        head += "\nНатисніть номер найкращої історії 👇"
+    if not rows:
+        await message.answer(head + "\n\nПоки немає.")
+        return
+    chunk, buttons = head + "\n", []
+    for n, (uid, p) in enumerate(rows, 1):
+        line = f"\n<b>{n}. {escape(p['name'])}</b>: «{escape(p['stories'][str(q)])}»\n"
+        if len(chunk) + len(line) > 3800 or len(buttons) >= 40:
+            await message.answer(chunk, reply_markup=_number_kb(buttons, q in best))
+            chunk, buttons = "", []
+        chunk += line
+        buttons.append((f"🏆 {n}", f"bingo:best:{uid}:{q - 1}"))
+    await message.answer(chunk, reply_markup=_number_kb(buttons, q in best))
+
+
+def _number_kb(buttons: list[tuple[str, str]], done: bool) -> InlineKeyboardMarkup | None:
+    if done or not buttons:
+        return None
+    return kb(*[buttons[i:i + 5] for i in range(0, len(buttons), 5)])
 
 
 def status_text(content: Content, db: Storage) -> str:
@@ -268,7 +307,7 @@ def final_list(content: Content, db: Storage) -> str:
 async def bingo_command(message: Message, state: FSMContext, content: Content,
                         settings: Settings, db: Storage) -> None:
     if is_manager(message.from_user.id, settings):
-        await message.answer(status_text(content, db), reply_markup=manager_keyboard())
+        await message.answer(status_text(content, db), reply_markup=manager_keyboard(content, db))
     else:
         await open_card(message, message.from_user, state, content, db)
 
@@ -285,16 +324,7 @@ async def answers_command(message: Message, command: CommandObject, content: Con
     except (ValueError, AssertionError):
         await message.answer(f"Вкажіть номер питання: /bingo_answers 1 … /bingo_answers {total}")
         return
-    rows = [(p["name"], p["stories"][str(q)]) for p in players(db).values()
-            if p.get("name") and str(q) in p["stories"]]
-    chunk = f"<b>Питання {q} · «{escape(content.bingo.questions[q - 1].text)}»</b> - {len(rows)} історій\n"
-    for name, story in rows:
-        line = f"\n<b>{escape(name)}</b>: «{escape(story)}»\n"
-        if len(chunk) + len(line) > 3800:
-            await message.answer(chunk)
-            chunk = ""
-        chunk += line
-    await message.answer(chunk if rows or chunk else "Поки немає.")
+    await send_answers(message, content, db, q)
 
 
 @router.message(Command("gift"))
@@ -313,7 +343,7 @@ async def gift_command(message: Message, command: CommandObject, content: Conten
     await message.answer(f"🎁 Подарунок від THE A для <b>{escape(name)}</b>:", reply_markup=kb(*rows))
 
 
-@router.callback_query(F.data.regexp(r"^bingo:(best|bestgive|gift|draw|final|list|undo|x)\b"))
+@router.callback_query(F.data.regexp(r"^bingo:(best|bestgive|gift|draw|final|list|undo|x|q)\b"))
 async def manager_button(callback: CallbackQuery, content: Content, settings: Settings,
                          db: Storage) -> None:
     if not is_manager(callback.from_user.id, settings):
@@ -326,6 +356,11 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
     if action == "x":
         await callback.answer("Скасовано")
         await msg.edit_reply_markup(reply_markup=None)
+        return
+
+    if action == "q":  # list of stories for a question, with 🏆 buttons
+        await callback.answer()
+        await send_answers(msg, content, db, int(parts[2]))
         return
 
     if action == "list":
@@ -363,7 +398,8 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
             await callback.answer("Мати і сумки закінчились.", show_alert=True)
             return
         await callback.answer()
-        await msg.answer("Який подарунок за цю історію?", reply_markup=kb(*rows, [("✖ Скасувати", "bingo:x")]))
+        await msg.answer(f"Питання {q + 1} · <b>{escape(players(db)[uid]['name'])}</b>: який подарунок?",
+                         reply_markup=kb(*rows, [("✖ Скасувати", "bingo:x")]))
         return
 
     if action == "bestgive":
@@ -378,8 +414,9 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
             return
         add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "best", "q": q + 1})
         await callback.answer("🏆 Готово")
-        await msg.edit_text(f"🏆 {escape(p['name'])} - {escape(content.bingo.prize(prize_id).label)} "
-                            f"(питання {q + 1}). Залишилось: {left(db, content, prize_id)}")
+        await msg.edit_text(f"🏆 Питання {q + 1}: виграв(ла) <b>{escape(p['name'])}</b> - "
+                            f"{escape(content.bingo.prize(prize_id).label)}. "
+                            f"Залишилось: {left(db, content, prize_id)}")
         return
 
     if action == "gift":

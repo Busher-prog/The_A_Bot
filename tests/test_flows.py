@@ -331,9 +331,33 @@ async def test_bingo_undo_and_status(env, content):
     await dp.feed_update(bot, msg("/bingo", user=MANAGER))
     status = session.to(MANAGER.id)[-1]
     assert "Учасників: 1" in status.text and "Спортивна сумка: 5 з 5" in status.text
-    assert status.reply_markup.inline_keyboard[0][0].callback_data == "bingo:draw"
+    datas = [b.callback_data for row in status.reply_markup.inline_keyboard for b in row]
+    assert "bingo:q:1" in datas and "bingo:draw" in datas and "bingo:list" in datas
     await dp.feed_update(bot, msg("/bingo_answers 3", user=MANAGER))
-    assert "Гість 1</b>: «Історія Гість 1 про питання 3»" in session.to(MANAGER.id)[-1].text
+    assert "1. Гість 1</b>: «Історія Гість 1 про питання 3»" in session.to(MANAGER.id)[-1].text
+
+
+async def test_bingo_pick_winner_from_list(env, content):
+    dp, bot, session, storage = env
+    for n in range(3):
+        await play(dp, bot, bingo_user(n), f"Гість {n}", yes_with_story=(1,))
+    await dp.feed_update(bot, msg("/bingo", user=MANAGER))
+    panel = session.to(MANAGER.id)[-1].reply_markup.inline_keyboard
+    assert panel[0][1].text == "📝 2 (3)" and panel[0][1].callback_data == "bingo:q:2"
+
+    await dp.feed_update(bot, press("bingo:q:2", user=MANAGER))
+    lst = session.to(MANAGER.id)[-1]
+    assert "3 історій" in lst.text and "<b>2. Гість 1</b>" in lst.text
+    assert [b.text for b in lst.reply_markup.inline_keyboard[0]] == ["🏆 1", "🏆 2", "🏆 3"]
+
+    await dp.feed_update(bot, press(lst.reply_markup.inline_keyboard[0][1].callback_data, user=MANAGER))
+    assert "Гість 1" in session.to(MANAGER.id)[-1].text
+    await dp.feed_update(bot, press(f"bingo:bestgive:{bingo_user(1).id}:1:sport_bag", user=MANAGER))
+    assert storage.get_state("bingo_awards")[0]["name"] == "Гість 1"
+
+    await dp.feed_update(bot, press("bingo:q:2", user=MANAGER))
+    lst = session.to(MANAGER.id)[-1]
+    assert "Вже обрано: <b>Гість 1</b>" in lst.text and lst.reply_markup is None
 
 
 async def test_bingo_manager_buttons_only_for_manager(env):
