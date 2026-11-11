@@ -22,6 +22,7 @@
 | Карточки для менеджера (Ксении) | `bot/formatting.py` |
 | Переписка клиент ↔ менеджер | `bot/handlers/manager.py` |
 | Согласование постов канала | `bot/handlers/posts.py` |
+| Бизнес-бинго (I AM. IN): вопросы, подарки, розыгрыши | `content/texts.yaml` → `bingo`, логика `bot/handlers/bingo.py` |
 
 В 90% случаев правка — только `content/texts.yaml`, код трогать не нужно.
 Форматирование текстов — Telegram HTML (`<b>`, `<i>`, `<code>`, `<a href>`); символы `< > &` в

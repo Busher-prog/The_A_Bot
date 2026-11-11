@@ -1,6 +1,7 @@
 """Loads and validates bot texts from content/texts.yaml."""
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, HttpUrl, model_validator
@@ -66,28 +67,31 @@ class Form(BaseModel):
     extra: dict[str, str] = {}
 
 
-class BingoCell(BaseModel):
-    short: str = Field(max_length=20)
-    text: str
-
-
 class Prize(BaseModel):
     id: str
     label: str
     qty: int = Field(ge=0)
+    pool: Literal["draw", "best", "final"]
 
 
 class Bingo(BaseModel):
     button: str
     intro: str
-    cells: list[BingoCell] = Field(min_length=9, max_length=9)
+    ask_name: str
+    yes_button: str
+    no_button: str
+    question_header: str
     story_prompt: str
     skip_button: str
-    story_saved: str
-    bingo_text: str
-    full_text: str
-    winner_text: str
+    questions: list[str] = Field(min_length=1)
+    final_question: str
+    done: str
+    already_done: str
+    best_limit: int = 9
     prizes: list[Prize]
+
+    def prize(self, prize_id: str) -> Prize | None:
+        return next((p for p in self.prizes if p.id == prize_id), None)
 
 
 class Buttons(BaseModel):

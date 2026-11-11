@@ -82,7 +82,7 @@ async def src_button(callback: CallbackQuery, state: FSMContext, bot: Bot, conte
     await state.set_state(None)  # a menu button ends any unfinished question/story
 
     if action == "bingo":
-        await bingo.open_card(callback.message, user, content, db)
+        await bingo.open_card(callback.message, user, state, content, db)
     elif action == "calc":
         await calculator.begin(callback.message, state)
     elif action in ("consult", "lead_start") or action.startswith("form_"):
