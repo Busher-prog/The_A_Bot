@@ -355,7 +355,8 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
     pets = session.to(MANAGER.id)[-1]  # the pet question: the manager picks too
     assert "Фінальне питання" in pets.text and "Відповідей: 18" in pets.text
     assert all(b.text.isdigit() for b in buttons_of(pets))
-    await dp.feed_update(bot, press(free_button(pets).callback_data, user=MANAGER))
+    assert "🎁" not in pets.text  # nobody is blocked on the audit
+    await dp.feed_update(bot, press(buttons_of(pets)[0].callback_data, user=MANAGER))
 
     final = session.to(MANAGER.id)[-1]
     assert final.text.startswith("<b>🏆 Бізнес-бінго · переможці</b>") and final.reply_markup is None
@@ -367,10 +368,10 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
     aw = storage.get_state("bingo_awards")
     assert sum(1 for a in aw if a["pool"] == "draw") == 7
     assert sum(1 for a in aw if a["pool"] == "best") == 9
-    # the draw happened last, among people without any other gift
+    # the draw happened last, never to someone with a mat / bag
     assert [a["pool"] for a in aw][-7:] == ["draw"] * 7
-    others = {a["user_id"] for a in aw if a["pool"] != "draw"}
-    assert not {a["user_id"] for a in aw if a["pool"] == "draw"} & others
+    best = {a["user_id"] for a in aw if a["pool"] == "best"}
+    assert not {a["user_id"] for a in aw if a["pool"] == "draw"} & best
     assert [a["prize"] for a in aw if a["pool"] == "final"] == ["audit"]  # only the audit
     assert sum(1 for a in aw if a["prize"] in ("yoga_mat", "sport_bag")) == 9  # 10th stays with THE A
 
@@ -387,7 +388,7 @@ async def test_bingo_question_without_answers_is_skipped(env, content):
     assert "Питання 3 ·" in lst.text  # 1 and 2 had no answers
     await dp.feed_update(bot, press(buttons_of(lst)[0].callback_data, user=MANAGER))
     pets = session.to(MANAGER.id)[-1]
-    assert "Фінальне питання" in pets.text  # the only guest already won → only "skip" is useful
+    assert "Фінальне питання" in pets.text
     await dp.feed_update(bot, press(buttons_of(pets)[-1].callback_data, user=MANAGER))
     assert "переможці" in session.to(MANAGER.id)[-1].text
 
@@ -422,8 +423,8 @@ async def test_bingo_draw_only_among_finished(env, content):
     await dp.feed_update(bot, press("bingo:start", user=MANAGER))
     await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(1).id}:final", user=MANAGER))  # pet → audit
     assert "переможці" in session.to(MANAGER.id)[-1].text
-    drawn = [a["name"] for a in storage.get_state("bingo_awards") if a["pool"] == "draw"]
-    assert drawn == ["Дійшов"]  # the pet winner and the unfinished one take no part
+    drawn = sorted(a["name"] for a in storage.get_state("bingo_awards") if a["pool"] == "draw")
+    assert drawn == ["Дійшов", "Котик"]  # the audit winner takes part too; the unfinished one doesn't
 
 async def test_bingo_one_gift_per_person(env, content):
     dp, bot, session, storage = env
@@ -462,9 +463,11 @@ async def test_bingo_skip_when_everyone_has_a_gift(env, content):
         assert "пропустити" in skip.text and skip.callback_data == "bingo:skip_q:2"
         await dp.feed_update(bot, press(skip.callback_data, user=MANAGER))
         pets = session.to(MANAGER.id)[-1]
-        assert "Фінальне питання" in pets.text
-        await dp.feed_update(bot, press(buttons_of(pets)[-1].callback_data, user=MANAGER))  # skip pets too
+        assert "Фінальне питання" in pets.text and "пропустити" not in pets.text
+        await dp.feed_update(bot, press(buttons_of(pets)[-1].callback_data, user=MANAGER))  # same person: OK
         assert "переможці" in session.to(MANAGER.id)[-1].text
+        pools = [a["pool"] for a in storage.get_state("bingo_awards")]
+        assert pools == ["best", "final"]
     finally:
         content.bingo.draw_count = 7
 
@@ -480,7 +483,7 @@ async def test_bingo_draw_excludes_winners(env, content):
     final = session.to(MANAGER.id)[-1].text
     aw = storage.get_state("bingo_awards")
     drawn = {a["user_id"] for a in aw if a["pool"] == "draw"}
-    assert drawn == {bingo_user(2).id, bingo_user(3).id}  # only the rest; not the unfinished one
+    assert drawn == {bingo_user(1).id, bingo_user(2).id, bingo_user(3).id}  # all but the mat/bag winner
     assert final.index("🎲 Розіграш") < final.index("📝 Найкращі історії") < final.index("🐾 Фінальне питання")
 
 async def test_bingo_participant_numbers_are_permanent(env, content):
@@ -508,3 +511,17 @@ async def test_manager_can_play_as_participant(env, content):
     await play(dp, bot, MANAGER, "Тестер", yes_with_story=(0,))
     p = storage.get_state("bingo")[str(MANAGER.id)]
     assert p["name"] == "Тестер" and p["stories"]["1"] and p["final"] == "Бублик" and p["done_at"]
+
+
+async def test_bingo_audit_open_to_everybody(env, content):
+    dp, bot, session, storage = env
+    for n in range(3):
+        await play(dp, bot, bingo_user(n), f"Гість {n}", yes_with_story=(0,))
+    await dp.feed_update(bot, press("bingo:start", user=MANAGER))
+    await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(0).id}:1", user=MANAGER))  # mat / bag
+    pets = session.to(MANAGER.id)[-1]
+    assert "🎁" not in pets.text
+    await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(0).id}:final", user=MANAGER))  # same person
+    aw = storage.get_state("bingo_awards")
+    assert [a["prize"] for a in aw if a["user_id"] == bingo_user(0).id][-1] == "audit"
+    assert bingo_user(0).id not in {a["user_id"] for a in aw if a["pool"] == "draw"}

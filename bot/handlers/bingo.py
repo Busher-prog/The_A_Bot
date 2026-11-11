@@ -4,9 +4,9 @@ Guest:  full name → 9 questions (✅ / ❌ buttons) → after ✅ a detailed s
         → final question → "winners will be announced from the stage".
 Manager (Ksenia): see "manager side" below — /bingo → ▶️ → answers per question → final list.
 Prize pools (texts.yaml → bingo.prizes):
-  draw  — at the end, random (draw_count items) among finishers without any gift; the rest for /gift;
+  draw  — at the end, random (draw_count items) among finishers without a mat / bag; the rest for /gift;
   best  — Ksenia's choice: one gift per question with stories, one per person;
-  final — the pet-answer winner (chosen by Ksenia) gets only the audit.
+  final — the pet-answer winner (chosen by Ksenia, anybody can win) gets only the audit.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
 """
 
@@ -219,12 +219,12 @@ def story_questions(content: Content) -> list[int]:
 
 
 def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
-    """At the very end: random caps / t-shirts among those who finished the bingo and got nothing."""
+    """At the very end: random caps / t-shirts among finishers without a physical gift (audit doesn't count)."""
     drawn = sum(1 for a in awards(db) if a["pool"] == "draw")
     items = pool_items(db, content, "draw")
     rng.shuffle(items)
     items = items[:max(0, content.bingo.draw_count - drawn)]
-    has_gift = {str(a.get("user_id")) for a in awards(db)}
+    has_gift = {str(a.get("user_id")) for a in awards(db) if a["pool"] in ("best", "gift", "draw")}
     candidates = [(uid, p) for uid, p in players(db).items() if p.get("done_at") and uid not in has_gift]
     rng.shuffle(candidates)
     result = []
@@ -253,9 +253,9 @@ def answers_for(db: Storage, q: int) -> list[tuple[str, dict]]:
     return sorted(rows, key=lambda r: nums[r[0]])
 
 
-# Who may still be chosen: whoever won with an answer can't win again (another answer or the pet).
-# The random draw happens last, only among people without any gift.
-BLOCKING_POOLS = {"best", "final"}
+# Whoever won a mat / bag with an answer can't win another answer, nor a cap / t-shirt in the draw.
+# The audit (pet question) is open to everybody and doesn't exclude from the draw.
+BLOCKING_POOLS = {"best"}
 
 
 def gifts_of(content: Content, db: Storage, pools: set[str]) -> dict[str, str]:
@@ -298,7 +298,7 @@ async def show_next(message: Message, content: Content, db: Storage) -> None:
             await send_list(message, f"<b>Фінальне питання · «Як звали вашого улюбленця?»</b>\n"
                                      f"Відповідей: {len(rows)}. Натисніть номер найкращої 👇",
                             [(uid, p["final"]) for uid, p in rows], [p["name"] for _, p in rows], "final",
-                            *marks_of(content, db), participant_numbers(db))
+                            {}, set(), participant_numbers(db))  # the audit: everybody can win it
             return
     # all picks done → random caps / t-shirts among those who got nothing, then the final list
     if not any(a["pool"] == "draw" for a in awards(db)):
@@ -466,8 +466,8 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         await callback.answer(f"Для питання {tag} переможця вже обрано.", show_alert=True)
         return
 
-    already = gifts_of(content, db, BLOCKING_POOLS).get(uid)
-    if already:  # who won with an answer can't win again
+    already = None if tag == "final" else gifts_of(content, db, BLOCKING_POOLS).get(uid)
+    if already:  # who won with an answer can't win another answer (the audit is open to everybody)
         name = (players(db).get(uid) or {}).get("name", "")
         await callback.answer(f"⚠️ {name} вже отримав(ла) подарунок: {already}.\n\nОберіть іншу відповідь.",
                               show_alert=True)
