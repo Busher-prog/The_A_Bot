@@ -11,7 +11,8 @@ Manager (Ksenia), all in the bot:
 Prize pools (texts.yaml → bingo.prizes):
   draw  — random (draw_count items) among participants who have no gift yet; the rest for /gift;
   best  — Ksenia's choice: one gift per question with stories, one per person;
-  final — random among everyone who answered the final question; leftovers of "best" go here too.
+  final — ONE random winner among everyone who answered the final question gets the audit
+          + whatever is left of the "best" pool.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
 """
 
@@ -308,6 +309,17 @@ def final_list(content: Content, db: Storage) -> str:
         if not items:
             continue
         lines += ["", f"<b>{title}:</b>"]
+        if pool == "final":
+            by_person: dict[str, list[dict]] = {}
+            for a in items:
+                by_person.setdefault(f"{a.get('user_id')}|{a['name']}", []).append(a)
+            for group in by_person.values():
+                labels = " + ".join(escape(getattr(content.bingo.prize(a["prize"]), "label", a["prize"]))
+                                    for a in group)
+                pet = (ps.get(str(group[0].get("user_id"))) or {}).get("final")
+                lines.append(f"• {escape(group[0]['name'])} - {labels}"
+                             + (f" (улюбленець: {escape(pet)})" if pet else ""))
+            continue
         for a in items:
             prize = content.bingo.prize(a["prize"])
             extra = ""
@@ -489,14 +501,13 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         if not candidates:
             await callback.answer("Ще ніхто не відповів на фінальне питання.", show_alert=True)
             return
-        # audit first, then leftovers of mats / bags
+        # ONE winner gets everything that is left for the final: audit + leftover mat / bag
         items.sort(key=lambda i: content.bingo.prize(i).pool != "final")
-        rng.shuffle(candidates)
-        won = list(zip(candidates, items))
-        for (uid, p), prize_id in won:
+        uid, p = rng.choice(candidates)
+        for prize_id in items:
             add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "final"})
         await callback.answer("🏁")
-        text = [f"🏁 <b>Фінальний розіграш</b> (серед {len(candidates)} учасників):"]
-        text += [f"• {escape(p['name'])} - {escape(content.bingo.prize(i).label)}" for (_, p), i in won]
-        await msg.answer("\n".join(text))
+        labels = " + ".join(escape(content.bingo.prize(i).label) for i in items)
+        await msg.answer(f"🏁 <b>Фінальний розіграш</b> (серед {len(candidates)} учасників):\n"
+                         f"• <b>{escape(p['name'])}</b> - {labels}")
         await msg.answer(final_list(content, db))
