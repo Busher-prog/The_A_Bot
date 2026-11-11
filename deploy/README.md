@@ -24,6 +24,14 @@ sudo journalctl -u the-a-bot -f             # лог
 sudo nano /opt/the-a-bot/.env               # токен / менеджер, затем: sudo systemctl restart the-a-bot
 ```
 
+## Сбросить бизнес-бинго (например, после тестового прогона)
+
+Удаляет только участников, ответы и подарки бинго. Лиды и переписка остаются, копия сохраняется.
+
+```bash
+sudo /opt/the-a-bot/deploy/bingo_reset.sh
+```
+
 ## Откат на старого бота
 
 ```bash
