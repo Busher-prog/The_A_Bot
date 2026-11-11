@@ -21,6 +21,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from bot.config import Settings
 from bot.content import Content
+from bot.keyboards import start_menu
 from bot.storage import Storage, now_iso
 
 router = Router(name="bingo")
@@ -80,11 +81,22 @@ def pool_items(db: Storage, content: Content, *pools: str) -> list[str]:
 
 # --- guest side ---------------------------------------------------------------------------------
 
+async def show_home_screen(message: Message, user_id: int, content: Content, db: Storage) -> None:
+    """After the bingo: the start screen with all buttons, so people can look around the bot.
+    The screen they came from (QR code), or the first screen that has the bingo button."""
+    key, screen = content.screen_by_start_param(db.user(user_id).get("source"))
+    if not any(b.id == "bingo" for b in screen.buttons):
+        key = next((k for k, sc in content.screens.items() if any(b.id == "bingo" for b in sc.buttons)), key)
+        screen = content.screens[key]
+    await message.answer(screen.text, reply_markup=start_menu(content, key))
+
+
 async def open_card(message: Message, user: User, state: FSMContext, content: Content,
                     db: Storage) -> None:
     p = get_player(db, user.id)
     if p and p.get("done_at"):
         await message.answer(content.bingo.already_done.format(name=escape(p["name"])))
+        await show_home_screen(message, user.id, content, db)
         return
     if not p or "step" not in p:  # not registered yet
         await message.answer(content.bingo.intro)
@@ -198,6 +210,7 @@ async def got_final(message: Message, state: FSMContext, content: Content, db: S
     db.append("bingo.jsonl", {"event": "final", "text": p["final"], "name": p["name"],
                               "user_id": user.id})
     await message.answer(content.bingo.done.format(name=escape(p["name"])))
+    await show_home_screen(message, user.id, content, db)
 
 
 # --- manager side ---------------------------------------------------------------------------------

@@ -264,7 +264,9 @@ async def test_bingo_guest_flow(env, content):
         await dp.feed_update(bot, press(f"bingo:ans:{q}:n"))
     assert "Финальный вопрос" in session.to(CLIENT.id)[-1].text
     await dp.feed_update(bot, msg("Бублик"))
-    assert "Олена Коваленко" in session.to(CLIENT.id)[-1].text
+    assert "Олена Коваленко" in session.to(CLIENT.id)[-2].text  # thanks...
+    home = session.to(CLIENT.id)[-1]  # ...then the start screen with all buttons
+    assert home.text == content.screens["iam"].text and labels(home)[0] == content.bingo.button
 
     p = storage.get_state("bingo")[str(CLIENT.id)]
     assert p["answers"]["1"] == "yes" and p["answers"]["2"] == "yes" and p["answers"]["3"] == "no"
@@ -273,7 +275,8 @@ async def test_bingo_guest_flow(env, content):
     assert session.to(MANAGER.id) == []
 
     await dp.feed_update(bot, press("src:iam:bingo"))
-    assert "уже прошли" in session.to(CLIENT.id)[-1].text
+    assert "уже прошли" in session.to(CLIENT.id)[-2].text
+    assert session.to(CLIENT.id)[-1].text == content.screens["iam"].text
 
 
 async def test_bingo_question_without_story(env, content):
@@ -412,7 +415,7 @@ async def test_bingo_manager_actions_only_for_manager(env):
     await dp.feed_update(bot, press("bingo:start"))
     assert storage.get_state("bingo_awards") is None
     await dp.feed_update(bot, msg("/bingo"))
-    assert "уже прошли" in session.to(CLIENT.id)[-1].text
+    assert "уже прошли" in session.to(CLIENT.id)[-2].text
 
 
 async def test_bingo_draw_only_among_finished(env, content):
