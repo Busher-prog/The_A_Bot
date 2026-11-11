@@ -99,6 +99,7 @@ class Bingo(BaseModel):
     final_question: str
     done: str
     already_done: str
+    draw_count: int = Field(default=7, ge=0)  # items of the "draw" pool given by the random draw
     prizes: list[Prize]
 
     @property

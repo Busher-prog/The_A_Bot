@@ -297,17 +297,19 @@ async def test_bingo_prizes_and_final_list(env, content):
     await dp.feed_update(bot, msg("/gift Марія Шевченко", user=MANAGER))
     await dp.feed_update(bot, press("bingo:gift:tshirt", user=MANAGER))
 
-    # draw: 3+3+4-1 = 9 items among guests without gifts (13 of them)
+    # draw: 7 items (draw_count) among guests without gifts; 2 caps/t-shirts stay for /gift
     await dp.feed_update(bot, press("bingo:draw", user=MANAGER))
     aw = storage.get_state("bingo_awards")
     drawn = [a for a in aw if a["pool"] == "draw"]
-    assert len(drawn) == 9 and len({a["user_id"] for a in drawn}) == 9
+    assert len(drawn) == 7 and len({a["user_id"] for a in drawn}) == 7
     assert not {a["user_id"] for a in drawn} & {guests[0].id, guests[1].id}
 
     # final: audit + 8 leftover mats/bags among the 12 who answered the final question
     await dp.feed_update(bot, press("bingo:final", user=MANAGER))
     final = [a for a in storage.get_state("bingo_awards") if a["pool"] == "final"]
     assert final[0]["prize"] == "audit" and len(final) == 9
+    # 10 caps/t-shirts - 1 gift - 7 drawn = 2 left for /gift
+    assert sum(1 for a in storage.get_state("bingo_awards") if a["prize"] in ("cap_dark", "cap_light", "tshirt")) == 8
     assert {a["user_id"] for a in final} <= {g.id for g in guests[:12]}
 
     report = session.to(MANAGER.id)[-1].text
@@ -317,9 +319,9 @@ async def test_bingo_prizes_and_final_list(env, content):
                  "улюбленець: Бублик"):
         assert part in report
 
-    # nothing left to draw
+    # the draw does not run twice
     await dp.feed_update(bot, press("bingo:draw", user=MANAGER))
-    assert len([a for a in storage.get_state("bingo_awards") if a["pool"] == "draw"]) == 9
+    assert len([a for a in storage.get_state("bingo_awards") if a["pool"] == "draw"]) == 7
 
 
 async def test_bingo_undo_and_status(env, content):

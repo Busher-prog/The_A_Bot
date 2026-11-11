@@ -9,7 +9,7 @@ Manager (Ksenia), all in the bot:
   - /bingo → question buttons → numbered list of stories with 🏆 N buttons (also /bingo_answers N);
   - /gift Name Surname: a gift "from THE A" (before the draw).
 Prize pools (texts.yaml → bingo.prizes):
-  draw  — random among all registered participants who have no gift yet;
+  draw  — random (draw_count items) among participants who have no gift yet; the rest for /gift;
   best  — Ksenia's choice: one gift per question with stories, one per person;
   final — random among everyone who answered the final question; leftovers of "best" go here too.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
@@ -223,7 +223,7 @@ def manager_keyboard(content: Content, db: Storage) -> InlineKeyboardMarkup:
     first = story_questions(content)[0] if story_questions(content) else None
     start = [[(f"▶️ Вибір переможців: почати з питання {first}", f"bingo:q:{first}")]] if first else []
     return kb(*start, *rows,
-              [("🎲 Розіграш кепок і футболок", "bingo:draw")],
+              [(f"🎲 Розіграш: {content.bingo.draw_count} кепок/футболок", "bingo:draw")],
               [("🏁 Фінальний розіграш (мат + аудит)", "bingo:final")],
               [("📋 Фінальний список для сцени", "bingo:list")],
               [("↩️ Скасувати останній подарунок", "bingo:undo")])
@@ -286,7 +286,8 @@ def status_text(content: Content, db: Storage) -> str:
     best_given = sum(1 for a in awards(db) if a["pool"] == "best")
     lines = ["<b>🎯 Бізнес-бінго</b>", "",
              f"Учасників: {len(named)} · дійшли до фіналу: {finals} · історій: {stories}",
-             f"Подаровано за історії: {best_given} з {content.bingo.best_limit}", "",
+             f"Подаровано за історії: {best_given} з {content.bingo.best_limit}",
+             f"Розіграно кепок/футболок: {sum(1 for a in awards(db) if a['pool'] == 'draw')} з {content.bingo.draw_count}", "",
              "<b>Залишилось подарунків:</b>"]
     lines += [f"• {escape(p.label)}: {left(db, content, p.id)} з {p.qty}" for p in content.bingo.prizes]
     best_q = {a.get("q") for a in awards(db) if a["pool"] == "best"}
@@ -457,15 +458,17 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         return
 
     if action == "draw":
+        drawn = sum(1 for a in awards(db) if a["pool"] == "draw")
         items = pool_items(db, content, "draw")
+        rng.shuffle(items)
+        items = items[:max(0, content.bingo.draw_count - drawn)]
         if not items:
-            await callback.answer("Кепки і футболки вже розіграні.", show_alert=True)
+            await callback.answer("Розіграш кепок і футболок уже проведено.", show_alert=True)
             return
         has_gift = {str(a.get("user_id")) for a in awards(db)}
         candidates = [(uid, p) for uid, p in players(db).items()
                       if p.get("name") and uid not in has_gift]
         rng.shuffle(candidates)
-        rng.shuffle(items)
         won = list(zip(candidates, items))
         for (uid, p), prize_id in won:
             add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "draw"})
