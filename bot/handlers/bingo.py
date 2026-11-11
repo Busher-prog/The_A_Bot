@@ -4,7 +4,7 @@ Guest:  full name → 9 questions (✅ / ❌ buttons) → after ✅ a detailed s
         → final question → "winners will be announced from the stage".
 Manager (Ksenia): see "manager side" below — /bingo → ▶️ → answers per question → final list.
 Prize pools (texts.yaml → bingo.prizes):
-  draw  — random (draw_count items) among those who finished, at "▶️ Почати"; the rest for /gift;
+  draw  — at the end, random (draw_count items) among finishers without any gift; the rest for /gift;
   best  — Ksenia's choice: one gift per question with stories, one per person;
   final — the pet-answer winner (chosen by Ksenia) gets only the audit.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
@@ -203,10 +203,11 @@ async def got_final(message: Message, state: FSMContext, content: Content, db: S
 # --- manager side ---------------------------------------------------------------------------------
 #
 # Flow for Ksenia — as few buttons as possible:
-#   /bingo → [▶️ Почати] → random draw of draw_count caps / t-shirts (silently)
+#   /bingo → [▶️ Почати]
 #   → question 1: one message with all answers, buttons are only the numbers
 #   → she taps a number (= the participant's permanent number): mat or bag → question 2 … → question 9
-#   → the pet question: same list, she picks → the audit → ONLY NOW the final list (no messages in between).
+#   → the pet question: same list, she picks → the audit
+#   → random draw of draw_count caps / t-shirts among those who got nothing → the final list.
 
 def is_manager(user_id: int, settings: Settings) -> bool:
     return settings.managers_chat_id is not None and user_id == settings.managers_chat_id
@@ -218,7 +219,7 @@ def story_questions(content: Content) -> list[int]:
 
 
 def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
-    """Random caps / t-shirts among those who finished the bingo. Returns [(name, prize label)]."""
+    """At the very end: random caps / t-shirts among those who finished the bingo and got nothing."""
     drawn = sum(1 for a in awards(db) if a["pool"] == "draw")
     items = pool_items(db, content, "draw")
     rng.shuffle(items)
@@ -252,9 +253,8 @@ def answers_for(db: Storage, q: int) -> list[tuple[str, dict]]:
     return sorted(rows, key=lambda r: nums[r[0]])
 
 
-# Who may still be chosen. Change BLOCKING_POOLS to change the rule:
-#   "best"  - won with an answer → can't win again (neither another answer nor the pet question);
-#   "draw"  - won a cap / t-shirt at random → may still win (not marked in the lists).
+# Who may still be chosen: whoever won with an answer can't win again (another answer or the pet).
+# The random draw happens last, only among people without any gift.
 BLOCKING_POOLS = {"best", "final"}
 
 
@@ -300,6 +300,9 @@ async def show_next(message: Message, content: Content, db: Storage) -> None:
                             [(uid, p["final"]) for uid, p in rows], [p["name"] for _, p in rows], "final",
                             *marks_of(content, db), participant_numbers(db))
             return
+    # all picks done → random caps / t-shirts among those who got nothing, then the final list
+    if not any(a["pool"] == "draw" for a in awards(db)):
+        run_draw(content, db)
     db.set_state("bingo_finished", True)
     await message.answer(final_list(content, db))
 
@@ -427,7 +430,6 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
             await show_next(msg, content, db)
             return
         db.set_state("bingo_started", True)
-        run_draw(content, db)  # silently: results only in the final list
         await show_next(msg, content, db)
         return
 
