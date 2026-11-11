@@ -29,6 +29,8 @@ def _label(c: Content, screen: str, b: Button) -> str:
         return c.buttons.consult
     if b.id == "calc":
         return CALC_LABEL
+    if b.id == "bingo":
+        return c.bingo.button
     if b.id.startswith("seg_"):
         return c.group_of(screen).topics[b.id[4:]].label
     return b.id

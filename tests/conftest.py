@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Chat, Message, MessageId, Update, User
 from bot.__main__ import build_dispatcher
 from bot.config import Settings
 from bot.content import load_content
-from bot.handlers import calculator, forms, manager, menu, posts
+from bot.handlers import bingo, calculator, forms, manager, menu, posts
 from bot.storage import Storage
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,7 +70,8 @@ def env(content, tmp_path):
     storage = Storage(tmp_path)
     dp = build_dispatcher(content, settings, storage)
     yield dp, bot, session, storage
-    for r in (menu.router, calculator.router, posts.router, forms.router, manager.router):
+    for r in (menu.router, calculator.router, posts.router, forms.router, bingo.router,
+              manager.router):
         r._parent_router = None
 
 

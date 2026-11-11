@@ -66,6 +66,30 @@ class Form(BaseModel):
     extra: dict[str, str] = {}
 
 
+class BingoCell(BaseModel):
+    short: str = Field(max_length=20)
+    text: str
+
+
+class Prize(BaseModel):
+    id: str
+    label: str
+    qty: int = Field(ge=0)
+
+
+class Bingo(BaseModel):
+    button: str
+    intro: str
+    cells: list[BingoCell] = Field(min_length=9, max_length=9)
+    story_prompt: str
+    skip_button: str
+    story_saved: str
+    bingo_text: str
+    full_text: str
+    winner_text: str
+    prizes: list[Prize]
+
+
 class Buttons(BaseModel):
     cancel: str
     photos: str
@@ -95,6 +119,7 @@ class Content(BaseModel):
     buttons: Buttons
     photos: Photos
     forms: dict[str, Form]
+    bingo: Bingo
     replies: Replies
     commands_text: dict[str, str]
     profile: Profile
@@ -119,7 +144,7 @@ class Content(BaseModel):
         return self
 
     def _check_button(self, where: str, b: Button, group: str) -> None:
-        if b.id in {"photos", "consult", "calc", "discuss", "menu"}:
+        if b.id in {"photos", "consult", "calc", "discuss", "menu", "bingo"}:
             return
         if b.id.startswith("form_") and b.id[5:] in self.forms:
             return

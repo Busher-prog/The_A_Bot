@@ -212,3 +212,64 @@ async def test_old_state_is_kept(tmp_path):
     assert s.users_from("ybc_lisbon") == [1]
     s.set_state("awaiting_edit_for", None)
     assert json.loads((tmp_path / "state.json").read_text())["last_update_id"] == 5
+
+
+# --- business bingo (I AM. IN) -------------------------------------------------------------
+
+async def test_bingo_card_on_iam_screen(env, content):
+    dp, bot, session, storage = env
+    await dp.feed_update(bot, msg("/start iam_lisbon"))
+    assert labels(session.to(CLIENT.id)[-1])[0] == content.bingo.button
+    await dp.feed_update(bot, press("src:iam:bingo"))
+    card = session.to(CLIENT.id)[-1]
+    assert "Бізнес-бінго" in card.text and len(card.reply_markup.inline_keyboard) == 3
+
+
+async def test_bingo_line_story_and_gift(env, content):
+    dp, bot, session, storage = env
+    await dp.feed_update(bot, press("src:iam:bingo"))
+    for i in (0, 1):
+        await dp.feed_update(bot, press(f"bingo:cell:{i}"))
+    await dp.feed_update(bot, press("bingo:skip"))
+    await dp.feed_update(bot, press("bingo:cell:2"))  # third in the first row
+    assert any("БІНГО" in m.text for m in session.to(CLIENT.id))
+    assert any("БІНГО · I AM. IN" in m.text for m in session.to(MANAGER.id))
+
+    await dp.feed_update(bot, msg("Банк тричі просив виписку за 5 років, ми відкривали рахунок 4 місяці"))
+    story_card = session.to(MANAGER.id)[-1]
+    assert "Бінго · історія" in story_card.text and "ще один документик" not in story_card.text
+    assert "Маю компанію в країні, де не живу" in story_card.text
+    assert "Входящее" not in story_card.text  # the story is not treated as a normal message
+
+    await dp.feed_update(bot, press(f"bingo:star:{CLIENT.id}", user=MANAGER))
+    await dp.feed_update(bot, press(f"bingo:gift:{CLIENT.id}", user=MANAGER))
+    choice = session.to(MANAGER.id)[-1]
+    assert [r[0].text for r in choice.reply_markup.inline_keyboard][0] == "Кепка темна (3)"
+    await dp.feed_update(bot, press(f"bingo:award:{CLIENT.id}:sport_bag", user=MANAGER))
+    assert "Спортивна сумка" in session.to(CLIENT.id)[-1].text
+    assert storage.get_state("bingo_prizes_left")["sport_bag"] == 4
+
+    # one gift per person
+    await dp.feed_update(bot, press(f"bingo:award:{CLIENT.id}:tshirt", user=MANAGER))
+    assert storage.get_state("bingo_prizes_left")["tshirt"] == 4
+
+    await dp.feed_update(bot, msg("/bingo", user=MANAGER))
+    report = session.to(MANAGER.id)[-1].text
+    assert "Учасників: 1" in report and "БІНГО" in report and "Спортивна сумка: 4 з 5" in report
+    assert len(journal(storage, "bingo.jsonl")) >= 5
+
+
+async def test_bingo_gift_buttons_only_for_manager(env):
+    dp, bot, session, storage = env
+    await dp.feed_update(bot, press("bingo:cell:4"))
+    await dp.feed_update(bot, press(f"bingo:award:{CLIENT.id}:tshirt"))
+    assert storage.get_state("bingo_prizes_left") is None
+
+
+async def test_bingo_unmark(env):
+    dp, bot, session, storage = env
+    await dp.feed_update(bot, press("bingo:cell:4"))
+    await dp.feed_update(bot, press("bingo:cell:4"))
+    assert storage.get_state("bingo")[str(CLIENT.id)]["marks"] == []
+    await dp.feed_update(bot, msg("звичайне питання"))
+    assert "Входящее" in session.to(MANAGER.id)[-1].text

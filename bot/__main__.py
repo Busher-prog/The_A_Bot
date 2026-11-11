@@ -10,14 +10,15 @@ from aiogram.types import BotCommand
 
 from bot.config import Settings
 from bot.content import load_content
-from bot.handlers import calculator, forms, manager, menu, posts
+from bot.handlers import bingo, calculator, forms, manager, menu, posts
 from bot.storage import Storage
 
 
 def build_dispatcher(content, settings, storage) -> Dispatcher:
     dp = Dispatcher(content=content, settings=settings, db=storage)
     # Order matters: manager router last, it catches all remaining messages.
-    dp.include_routers(menu.router, calculator.router, posts.router, forms.router, manager.router)
+    dp.include_routers(menu.router, calculator.router, posts.router, forms.router,
+                       bingo.router, manager.router)
     return dp
 
 

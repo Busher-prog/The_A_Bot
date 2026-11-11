@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import Settings
 from bot.content import Content
 from bot.formatting import event_card, new_lead_card
-from bot.handlers import calculator, forms
+from bot.handlers import bingo, calculator, forms
 from bot.keyboards import photos_menu, start_menu, topic_menu
 from bot.notify import to_manager
 from bot.storage import Storage, now_iso
@@ -79,8 +79,11 @@ async def src_button(callback: CallbackQuery, state: FSMContext, bot: Bot, conte
                                    "chat_id": chat_id, "user_id": user.id,
                                    "username": user.username})
     group = content.group_of(screen)
+    await state.set_state(None)  # a menu button ends any unfinished question/story
 
-    if action == "calc":
+    if action == "bingo":
+        await bingo.open_card(callback.message, user, content, db)
+    elif action == "calc":
         await calculator.begin(callback.message, state)
     elif action in ("consult", "lead_start") or action.startswith("form_"):
         form = {"consult": "consult", "lead_start": "hayat"}.get(action, action[5:])
