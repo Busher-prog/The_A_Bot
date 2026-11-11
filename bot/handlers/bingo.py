@@ -6,7 +6,7 @@ Manager (Ksenia): see "manager side" below — /bingo → ▶️ → answers per
 Prize pools (texts.yaml → bingo.prizes):
   draw  — random (draw_count items) among those who finished, at "▶️ Почати"; the rest for /gift;
   best  — Ksenia's choice: one gift per question with stories, one per person;
-  final — the pet-answer winner (chosen by Ksenia) gets the audit + whatever is left of "best".
+  final — the pet-answer winner (chosen by Ksenia) gets only the audit.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
 """
 
@@ -206,7 +206,7 @@ async def got_final(message: Message, state: FSMContext, content: Content, db: S
 #   /bingo → [▶️ Почати] → random draw of draw_count caps / t-shirts (one text message)
 #   → question 1: one message with all answers, buttons are only the numbers
 #   → she taps a number: the winner gets a mat or a bag (whatever is left) → question 2 … → question 9
-#   → the pet question: same list, she picks → audit + leftover mat / bag → the final list for the stage.
+#   → the pet question: same list, she picks → the audit (nothing physical) → the final list for the stage.
 
 def is_manager(user_id: int, settings: Settings) -> bool:
     return settings.managers_chat_id is not None and user_id == settings.managers_chat_id
@@ -215,10 +215,6 @@ def is_manager(user_id: int, settings: Settings) -> bool:
 def story_questions(content: Content) -> list[int]:
     """1-based numbers of questions that ask for a story."""
     return [i + 1 for i, qq in enumerate(content.bingo.questions) if qq.story]
-
-
-def best_winners(db: Storage) -> set[str]:
-    return {str(a.get("user_id")) for a in awards(db) if a["pool"] == "best"}
 
 
 def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
@@ -238,11 +234,9 @@ def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
 
 
 def give_final(content: Content, db: Storage, uid: str) -> None:
-    """The chosen pet-answer winner gets the audit + whatever is left of mats / bags."""
-    items = pool_items(db, content, "final", "best")
-    items.sort(key=lambda i: content.bingo.prize(i).pool != "final")  # audit first
+    """The chosen pet-answer winner gets the "final" pool only (the audit) - no physical gift."""
     p = players(db)[uid]
-    for prize_id in items:
+    for prize_id in pool_items(db, content, "final"):
         add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "final"})
 
 
@@ -250,54 +244,93 @@ def answers_for(db: Storage, q: int) -> list[tuple[str, dict]]:
     return [(uid, p) for uid, p in players(db).items() if p.get("name") and str(q) in p["stories"]]
 
 
+# Who may still be chosen. Change BLOCKING_POOLS to change the rule:
+#   "best"  - won with an answer → can't win again (neither another answer nor the pet question);
+#   "draw"  - won a cap / t-shirt at random → may still win (shown with 🎲).
+BLOCKING_POOLS = {"best", "final"}
+
+
+def gifts_of(content: Content, db: Storage, pools: set[str]) -> dict[str, str]:
+    """user_id -> what they already got from the given pools, e.g. "Кепка темна"."""
+    out: dict[str, list[str]] = {}
+    for a in awards(db):
+        if a.get("user_id") is not None and a["pool"] in pools:
+            out.setdefault(str(a["user_id"]), []).append(
+                getattr(content.bingo.prize(a["prize"]), "label", a["prize"]))
+    return {uid: " + ".join(v) for uid, v in out.items()}
+
+
+def marks_of(content: Content, db: Storage) -> tuple[dict[str, str], set[str]]:
+    """(blocked people with what they got, people who won the random draw)."""
+    blocked = gifts_of(content, db, BLOCKING_POOLS)
+    drawn = set(gifts_of(content, db, {"draw", "gift"}))
+    return blocked, drawn
+
+
 async def show_next(message: Message, content: Content, db: Storage) -> None:
     """Send the answers of the next question still without a winner; at the end — the final list."""
-    winners = best_winners(db)
     decided = {a.get("q") for a in awards(db) if a["pool"] == "best"}
     skipped = set(db.get_state("bingo_skipped") or [])
     for q in story_questions(content):
         if q in decided or q in skipped:
             continue
-        rows = [(uid, p) for uid, p in answers_for(db, q) if uid not in winners]
-        if not rows:  # nobody (new) answered: go on
+        rows = answers_for(db, q)
+        if not rows:  # nobody answered: go on
             db.set_state("bingo_skipped", sorted(skipped | {q}))
             skipped.add(q)
             continue
-        await send_answers(message, content, q, rows)
+        await send_answers(message, content, db, q, rows)
         return
-    if not any(a["pool"] == "final" for a in awards(db)):  # 10th question: the manager picks too
+    if not any(a["pool"] == "final" for a in awards(db)) and not db.get_state("bingo_final_skipped"):
+        # 10th question: the manager picks too
         rows = [(uid, p) for uid, p in players(db).items() if p.get("final")]
         if rows:
             await send_list(message, f"<b>Фінальне питання · «Як звали вашого улюбленця?»</b>\n"
                                      f"Відповідей: {len(rows)}. Натисніть номер найкращої 👇",
-                            [(uid, p["final"]) for uid, p in rows], [p["name"] for _, p in rows], "final")
+                            [(uid, p["final"]) for uid, p in rows], [p["name"] for _, p in rows], "final",
+                            *marks_of(content, db))
             return
     db.set_state("bingo_finished", True)
     await message.answer(final_list(content, db))
 
 
-async def send_answers(message: Message, content: Content, q: int, rows: list[tuple[str, dict]]) -> None:
+async def send_answers(message: Message, content: Content, db: Storage, q: int,
+                       rows: list[tuple[str, dict]]) -> None:
     head = (f"<b>Питання {q} · «{escape(content.bingo.questions[q - 1].text)}»</b>\n"
             f"Відповідей: {len(rows)}. Натисніть номер найкращої 👇")
     await send_list(message, head, [(uid, p["stories"][str(q)]) for uid, p in rows],
-                    [p["name"] for _, p in rows], str(q))
+                    [p["name"] for _, p in rows], str(q), *marks_of(content, db))
 
 
 async def send_list(message: Message, head: str, answers: list[tuple[str, str]], names: list[str],
-                    tag: str) -> None:
-    """Numbered "N. Name: answer" list; the only buttons are the numbers (bingo:pick:<uid>:<tag>)."""
+                    tag: str, blocked: dict[str, str], drawn: set[str]) -> None:
+    """Numbered "N. Name: answer" list; the only buttons are the numbers (bingo:pick:<uid>:<tag>).
+    🎁 = already won with an answer (can't be chosen), 🎲 = won the random draw (can be chosen).
+    If nobody can be chosen, a skip button is added."""
+    legend = []
+    if any(uid in blocked for uid, _ in answers):
+        legend.append("🎁 - вже отримав(ла) подарунок за відповідь")
+    if any(uid in drawn and uid not in blocked for uid, _ in answers):
+        legend.append("🎲 - виграв(ла) у розіграші, можна обрати")
+    if legend:
+        head += "\n" + "\n".join(legend)
     parts, chunk, buttons = [], head + "\n", []
     for n, ((uid, answer), name) in enumerate(zip(answers, names), 1):
         answer = answer if len(answer) <= 300 else answer[:297] + "…"
-        line = f"\n<b>{n}. {escape(name)}</b>: {escape(answer)}"
+        mark = " 🎁" if uid in blocked else (" 🎲" if uid in drawn else "")
+        line = f"\n<b>{n}. {escape(name)}</b>{mark}: {escape(answer)}"
         if len(chunk) + len(line) > 3900 or len(buttons) >= 60:
             parts.append((chunk, buttons))
             chunk, buttons = "", []
         chunk += line
         buttons.append((str(n), f"bingo:pick:{uid}:{tag}"))
     parts.append((chunk, buttons))
-    for text, btns in parts:
-        await message.answer(text, reply_markup=kb(*[btns[j:j + 6] for j in range(0, len(btns), 6)]))
+    nobody_free = all(uid in blocked for uid, _ in answers)
+    for i, (text, btns) in enumerate(parts):
+        rows = [btns[j:j + 6] for j in range(0, len(btns), 6)]
+        if nobody_free and i == len(parts) - 1:
+            rows.append([("⏭ Усі вже мають подарунки - пропустити", f"bingo:skip_q:{tag}")])
+        await message.answer(text, reply_markup=kb(*rows))
 
 
 def final_list(content: Content, db: Storage) -> str:
@@ -363,7 +396,7 @@ async def gift_command(message: Message, command: CommandObject, content: Conten
     await message.answer(f"🎁 Подарунок від THE A для <b>{escape(name)}</b>:", reply_markup=kb(*rows))
 
 
-@router.callback_query(F.data.regexp(r"^bingo:(start|pick|gift):?"))
+@router.callback_query(F.data.regexp(r"^bingo:(start|pick|gift|skip_q):?"))
 async def manager_button(callback: CallbackQuery, content: Content, settings: Settings,
                          db: Storage) -> None:
     if not is_manager(callback.from_user.id, settings):
@@ -371,13 +404,16 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         return
     parts = callback.data.split(":")
     action, msg = parts[1], callback.message
-    try:  # buttons are one-shot
-        await msg.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+
+    async def close() -> None:  # buttons are one-shot: removed only after a successful action
+        try:
+            await msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
     if action == "start":
         await callback.answer()
+        await close()
         if db.get_state("bingo_started"):
             await show_next(msg, content, db)
             return
@@ -396,34 +432,54 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         add_award(db, {"name": name, "user_id": None, "prize": prize_id, "pool": "gift"})
         db.set_state("bingo_pending_gift", None)
         await callback.answer("🎁")
+        await close()
         await msg.answer(f"🎁 {escape(name)} - {escape(content.bingo.prize(prize_id).label)}")
         return
 
-    uid, tag = parts[2], parts[3]
-    if tag == "final":  # the best pet answer: audit + leftover mat / bag
-        if any(a["pool"] == "final" for a in awards(db)):
-            await callback.answer("Фінального переможця вже обрано.", show_alert=True)
-            return
-        give_final(content, db, uid)
-        await callback.answer("🏆")
+    if action == "skip_q":  # every answer of this question is from someone who already has a gift
+        tag = parts[2]
+        if tag == "final":
+            db.set_state("bingo_final_skipped", True)
+        else:
+            db.set_state("bingo_skipped", sorted(set(db.get_state("bingo_skipped") or []) | {int(tag)}))
+        await callback.answer("⏭")
+        await close()
         await show_next(msg, content, db)
         return
 
-    # the best answer of question q
-    q = int(tag)
-    if q in {a.get("q") for a in awards(db) if a["pool"] == "best"}:
-        await callback.answer(f"Для питання {q} переможця вже обрано.", show_alert=True)
+    # pick: bingo:pick:<uid>:<question number | final>
+    uid, tag = parts[2], parts[3]
+    if tag == "final":
+        if any(a["pool"] == "final" for a in awards(db)):
+            await callback.answer("Фінального переможця вже обрано.", show_alert=True)
+            return
+    elif int(tag) in {a.get("q") for a in awards(db) if a["pool"] == "best"}:
+        await callback.answer(f"Для питання {tag} переможця вже обрано.", show_alert=True)
         return
-    if uid in best_winners(db):
-        await callback.answer("Ця людина вже має подарунок за відповідь.", show_alert=True)
+
+    already = gifts_of(content, db, BLOCKING_POOLS).get(uid)
+    if already:  # who won with an answer can't win again
+        name = (players(db).get(uid) or {}).get("name", "")
+        await callback.answer(f"⚠️ {name} вже отримав(ла) подарунок: {already}.\n\nОберіть іншу відповідь.",
+                              show_alert=True)
         return
+
+    p = players(db)[uid]
+    if tag == "final":  # the best pet answer: audit + leftover mat / bag
+        give_final(content, db, uid)
+        await callback.answer("🏆")
+        await close()
+        await show_next(msg, content, db)
+        return
+
     items = pool_items(db, content, "best")
     if not items:
         await callback.answer("Мати і сумки закінчились.", show_alert=True)
         return
-    p = players(db)[uid]
+    q = int(tag)
     prize_id = rng.choice(items)
     add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "best", "q": q})
     await callback.answer("🏆")
+    await close()
     await msg.answer(f"🏆 Питання {q}: <b>{escape(p['name'])}</b> - {escape(content.bingo.prize(prize_id).label)}")
     await show_next(msg, content, db)
