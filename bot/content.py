@@ -100,7 +100,7 @@ class Bingo(BaseModel):
     final_short: str = "Как звали вашего любимого питомца?"  # in the manager's lists
     done: str
     already_done: str
-    draw_count: int = Field(default=7, ge=0)  # items of the "draw" pool given by the random draw
+    draw_count: int = Field(default=10, ge=0)  # items of the "draw" pool given by the random draw
     prizes: list[Prize]
 
     @property

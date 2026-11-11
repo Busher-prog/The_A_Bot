@@ -4,7 +4,8 @@ Guest:  full name → 9 questions (✅ / ❌ buttons) → after ✅ a detailed s
         → final question → "winners will be announced from the stage".
 Manager (Ksenia): see "manager side" below — /bingo → ▶️ → answers per question → final list.
 Prize pools (texts.yaml → bingo.prizes):
-  draw  — at the end, random (draw_count items) among finishers without a mat / bag; the rest for /gift;
+  draw  — at the end, draw_count caps / t-shirts: first the /bingo_vip people (if they registered),
+          the rest random among finishers without a mat / bag;
   best  — Ksenia's choice: one gift per question with stories, one per person;
   final — the pet-answer winner (chosen by Ksenia, anybody can win) gets only the audit.
 All in state.json ("bingo", "bingo_awards") and the journal bingo.jsonl.
@@ -231,17 +232,66 @@ def story_questions(content: Content) -> list[int]:
     return [i + 1 for i, qq in enumerate(content.bingo.questions) if qq.story]
 
 
+# --- priority in the random draw ------------------------------------------------------------------
+# The manager sets names with /bingo_vip (kept on the server only - the repository is public).
+# Names are compared loosely: word order, ё/е, Ukrainian / Russian / Latin spelling
+# ("Алёна Ковалёва" = "Ковалёва Алёна" = "Альона Ковальова" = "Alona Kovaliova").
+
+_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "ґ": "g", "д": "d", "е": "e", "ё": "e", "є": "e", "ж": "zh",
+    "з": "z", "и": "i", "і": "i", "ї": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts", "ч": "ch",
+    "ш": "sh", "щ": "shch", "ъ": "", "ы": "i", "ь": "", "э": "e", "ю": "iu", "я": "ia", "'": "", "’": "",
+}
+
+
+def _skeleton(word: str) -> str:
+    """Consonant skeleton of a name, the same for Cyrillic and Latin spellings.
+    The first vowel is kept (Олена ≠ Алёна), except Олександра / Александра."""
+    latin = "".join(_TRANSLIT.get(ch, ch) for ch in word.lower())
+    latin = latin.replace("h", "")  # kh / zh / Olha ...
+    out = []
+    for ch in latin:
+        if ch.isalpha() and ch not in "aeiouyj" and (not out or out[-1] != ch):
+            out.append(ch)
+    body = "".join(out)
+    first = latin[:1]
+    if first in ("y", "j"):
+        first = "i"
+    if first in "aeiou" and first and not body.startswith("lks"):
+        return first + body
+    return body
+
+
+def _name_key(name: str) -> frozenset[str]:
+    return frozenset(s for s in (_skeleton(w) for w in name.replace("-", " ").split()) if s)
+
+
+def is_vip(name: str, vips: list[str]) -> bool:
+    key = _name_key(name)
+    return any(_name_key(v) and _name_key(v) <= key for v in vips)
+
+
+def vip_list(db: Storage) -> list[str]:
+    data = db.get_state("bingo_vip")
+    return data if isinstance(data, list) else []
+
+
 def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
-    """At the very end: random caps / t-shirts among finishers without a physical gift (audit doesn't count)."""
+    """At the very end: caps / t-shirts among participants without a physical gift (audit doesn't count).
+    Priority people (/bingo_vip) who registered get theirs first; the rest is random among finishers."""
     drawn = sum(1 for a in awards(db) if a["pool"] == "draw")
     items = pool_items(db, content, "draw")
     rng.shuffle(items)
     items = items[:max(0, content.bingo.draw_count - drawn)]
     has_gift = {str(a.get("user_id")) for a in awards(db) if a["pool"] in ("best", "gift", "draw")}
-    candidates = [(uid, p) for uid, p in players(db).items() if p.get("done_at") and uid not in has_gift]
-    rng.shuffle(candidates)
+    vips = vip_list(db)
+    free = [(uid, p) for uid, p in players(db).items() if p.get("name") and uid not in has_gift]
+    priority = [(uid, p) for uid, p in free if is_vip(p["name"], vips)]
+    others = [(uid, p) for uid, p in free if p.get("done_at") and (uid, p) not in priority]
+    rng.shuffle(others)
     result = []
-    for (uid, p), prize_id in zip(candidates, items):
+    for (uid, p), prize_id in zip(priority + others, items):
         add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "draw"})
         result.append((p["name"], content.bingo.prize(prize_id).label))
     return result
@@ -401,8 +451,31 @@ async def bingo_command(message: Message, state: FSMContext, content: Content,
         await show_next(message, content, db)  # continue where we stopped
     else:
         n = sum(1 for p in players(db).values() if p.get("name"))
-        await message.answer(f"<b>🎯 Бизнес-бинго</b>\nУчастников: {n}",
+        vips = vip_list(db)
+        extra = f"\n⭐ Приоритет в розыгрыше: {escape(', '.join(vips))}" if vips else ""
+        await message.answer(f"<b>🎯 Бизнес-бинго</b>\nУчастников: {n}{extra}",
                              reply_markup=kb([("▶️ Начать", "bingo:start")]))
+
+
+@router.message(Command("bingo_vip"))
+async def vip_command(message: Message, command: CommandObject, settings: Settings, db: Storage) -> None:
+    """/bingo_vip Имя Фамилия - priority in the cap / t-shirt draw; /bingo_vip - show the list;
+    /bingo_vip очистить - clear it."""
+    if not is_manager(message.from_user.id, settings):
+        return
+    name = " ".join((command.args or "").split())
+    vips = vip_list(db)
+    if name.lower() in ("очистить", "clear", "очистити"):
+        vips = []
+    elif name and not any(_name_key(name) == _name_key(v) for v in vips):
+        vips.append(name)
+    db.set_state("bingo_vip", vips)
+    found = [p["name"] for p in players(db).values() if p.get("name") and is_vip(p["name"], vips)]
+    lines = ["<b>⭐ Приоритет в розыгрыше кепок и футболок</b>"]
+    lines += [f"• {escape(v)}" for v in vips] or ["Список пуст."]
+    lines += ["", f"Уже среди участников: {escape(', '.join(found)) if found else 'пока никого'}",
+              "", "Добавить: /bingo_vip Имя Фамилия", "Очистить: /bingo_vip очистить"]
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("gift"))

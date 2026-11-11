@@ -369,11 +369,13 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
     final_lines = text.split("🐾 Финальный вопрос:</b>")[1].strip().splitlines()
     assert len(final_lines) == 1 and "Структурный аудит бизнеса от THE A (питомец: Бублик)" in final_lines[0]
     aw = storage.get_state("bingo_awards")
-    assert sum(1 for a in aw if a["pool"] == "draw") == 7
     assert sum(1 for a in aw if a["pool"] == "best") == 9
-    # the draw happened last, never to someone with a mat / bag
-    assert [a["pool"] for a in aw][-7:] == ["draw"] * 7
     best = {a["user_id"] for a in aw if a["pool"] == "best"}
+    finishers_left = sum(1 for g in guests[:18] if g.id not in best)
+    n_drawn = sum(1 for a in aw if a["pool"] == "draw")
+    assert n_drawn == min(10, finishers_left)
+    # the draw happened last, never to someone with a mat / bag
+    assert [a["pool"] for a in aw][-n_drawn:] == ["draw"] * n_drawn
     assert not {a["user_id"] for a in aw if a["pool"] == "draw"} & best
     assert [a["prize"] for a in aw if a["pool"] == "final"] == ["audit"]  # only the audit
     assert sum(1 for a in aw if a["prize"] in ("yoga_mat", "sport_bag")) == 9  # 10th stays with THE A
@@ -528,3 +530,44 @@ async def test_bingo_audit_open_to_everybody(env, content):
     aw = storage.get_state("bingo_awards")
     assert [a["prize"] for a in aw if a["user_id"] == bingo_user(0).id][-1] == "audit"
     assert bingo_user(0).id not in {a["user_id"] for a in aw if a["pool"] == "draw"}
+
+
+
+# --- priority in the draw (/bingo_vip) ---------------------------------------------------------
+
+def test_vip_name_matching():
+    from bot.handlers.bingo import is_vip
+    vips = ["Тарас Шевчук", "Ковалёва Алёна"]
+    assert is_vip("Шевчук Тарас", vips) and is_vip("Taras Shevchuk", vips)
+    assert is_vip("Альона Ковальова", vips) and is_vip("Alona Kovaliova", vips) and is_vip("Алена Ковалева", vips)
+    assert not is_vip("Олена Ковалева", vips) and not is_vip("Тарас", vips) and not is_vip("Іван Шевчук", vips)
+
+
+async def test_bingo_draw_gives_priority(env, content):
+    dp, bot, session, storage = env
+    content.bingo.draw_count = 2
+    try:
+        for n in range(6):
+            await play(dp, bot, bingo_user(n), f"Гість {n}", yes_with_story=())
+        await play(dp, bot, bingo_user(7), "Шевчук Тарас", yes_with_story=(), final=None)  # registered only
+        await dp.feed_update(bot, msg("/bingo_vip Тарас Шевчук", user=MANAGER))
+        await dp.feed_update(bot, msg("/bingo_vip Кто-то Отсутствующий", user=MANAGER))
+        assert "Уже среди участников: Шевчук Тарас" in session.to(MANAGER.id)[-1].text
+        await dp.feed_update(bot, msg("/bingo", user=MANAGER))
+        assert "Приоритет в розыгрыше" in session.to(MANAGER.id)[-1].text
+        await dp.feed_update(bot, press("bingo:start", user=MANAGER))
+        pets = session.to(MANAGER.id)[-1]
+        await dp.feed_update(bot, press(buttons_of(pets)[0].callback_data, user=MANAGER))
+        drawn = [a["name"] for a in storage.get_state("bingo_awards") if a["pool"] == "draw"]
+        assert len(drawn) == 2 and drawn[0] == "Шевчук Тарас"  # priority first, the absent one is skipped
+    finally:
+        content.bingo.draw_count = 10
+
+
+async def test_bingo_vip_only_for_manager_and_clear(env):
+    dp, bot, session, storage = env
+    await dp.feed_update(bot, msg("/bingo_vip Тарас Шевчук"))
+    assert storage.get_state("bingo_vip") is None
+    await dp.feed_update(bot, msg("/bingo_vip Тарас Шевчук", user=MANAGER))
+    await dp.feed_update(bot, msg("/bingo_vip очистить", user=MANAGER))
+    assert storage.get_state("bingo_vip") == []
