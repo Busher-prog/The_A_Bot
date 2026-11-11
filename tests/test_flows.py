@@ -247,22 +247,22 @@ async def test_bingo_guest_flow(env, content):
     assert session.to(CLIENT.id)[-1].text == content.bingo.ask_name
     await dp.feed_update(bot, msg("Олена Коваленко"))
     q1 = session.to(CLIENT.id)[-1]
-    assert "Питання 1 з 9" in q1.text
+    assert "Вопрос 1 из 9" in q1.text
     assert [r[0].text for r in q1.reply_markup.inline_keyboard] == [content.bingo.yes_button, content.bingo.no_button]
 
     await dp.feed_update(bot, press("bingo:ans:0:y"))
     prompt = session.to(CLIENT.id)[-1].text
-    assert "«Банк просив «ще один документик»»" in prompt and content.bingo.questions[0].prompt in prompt
+    assert "«Банк просил «ещё один документик»»" in prompt and content.bingo.questions[0].prompt in prompt
     await dp.feed_update(bot, msg("Банк просив виписку за 5 років тричі"))
     assert session.to(MANAGER.id) == []  # no card per story: the manager reads lists per question
-    assert "Питання 2 з 9" in session.to(CLIENT.id)[-1].text
+    assert "Вопрос 2 из 9" in session.to(CLIENT.id)[-1].text
 
     await dp.feed_update(bot, press("bingo:ans:0:n"))  # old button: ignored
     await dp.feed_update(bot, press("bingo:ans:1:y"))
     await dp.feed_update(bot, press("bingo:skip:1"))  # no story
     for q in range(2, 9):
         await dp.feed_update(bot, press(f"bingo:ans:{q}:n"))
-    assert "Фінальне питання" in session.to(CLIENT.id)[-1].text
+    assert "Финальный вопрос" in session.to(CLIENT.id)[-1].text
     await dp.feed_update(bot, msg("Бублик"))
     assert "Олена Коваленко" in session.to(CLIENT.id)[-1].text
 
@@ -273,7 +273,7 @@ async def test_bingo_guest_flow(env, content):
     assert session.to(MANAGER.id) == []
 
     await dp.feed_update(bot, press("src:iam:bingo"))
-    assert "вже пройшли" in session.to(CLIENT.id)[-1].text
+    assert "уже прошли" in session.to(CLIENT.id)[-1].text
 
 
 async def test_bingo_question_without_story(env, content):
@@ -285,7 +285,7 @@ async def test_bingo_question_without_story(env, content):
         await dp.feed_update(bot, press("src:iam:bingo"))
         await dp.feed_update(bot, msg("Олена"))
         await dp.feed_update(bot, press("bingo:ans:0:y"))
-        assert "Питання 2 з 9" in session.to(CLIENT.id)[-1].text
+        assert "Вопрос 2 из 9" in session.to(CLIENT.id)[-1].text
     finally:
         content.bingo.questions[0].story = True
 
@@ -303,9 +303,9 @@ async def test_bingo_closed_question_goes_on(env, content):
     for q in range(6):
         await dp.feed_update(bot, press(f"bingo:ans:{q}:n"))
     await dp.feed_update(bot, press("bingo:ans:6:y"))  # KYC: no story
-    assert "Питання 8 з 9" in session.to(CLIENT.id)[-1].text
+    assert "Вопрос 8 из 9" in session.to(CLIENT.id)[-1].text
     await dp.feed_update(bot, press("bingo:ans:7:y"))  # crypto: story with its own hint
-    assert "Як ви отримуєте оплату" in session.to(CLIENT.id)[-1].text
+    assert "Как вы получаете оплату" in session.to(CLIENT.id)[-1].text
     content.bingo.questions[6].story = True
 
 
@@ -333,38 +333,38 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
 
     await dp.feed_update(bot, msg("/bingo", user=MANAGER))
     start = session.to(MANAGER.id)[-1]
-    assert [b.text for b in buttons_of(start)] == ["▶️ Почати"]
+    assert [b.text for b in buttons_of(start)] == ["▶️ Начать"]
 
     before = len(session.to(MANAGER.id))
     await dp.feed_update(bot, press("bingo:start", user=MANAGER))
     assert len(session.to(MANAGER.id)) == before + 1  # straight to question 1
     assert storage.get_state("bingo_awards") is None  # no draw yet
     q1 = session.to(MANAGER.id)[-1]
-    assert "Питання 1" in q1.text and "Відповідей: 20" in q1.text
+    assert "Вопрос 1" in q1.text and "Ответов: 20" in q1.text
     assert all(b.text.isdigit() for b in buttons_of(q1))  # only numbers, nothing else
 
     for q in range(1, 10):
         lst = session.to(MANAGER.id)[-1]
-        assert f"Питання {q} ·" in lst.text and "Відповідей: 20" in lst.text  # everybody is listed
+        assert f"Вопрос {q} ·" in lst.text and "Ответов: 20" in lst.text  # everybody is listed
         assert all(b.text.isdigit() for b in buttons_of(lst))
         assert lst.text.count("</b> 🎁:") == q - 1  # previous answer winners: blocked
         await dp.feed_update(bot, press(free_button(lst).callback_data, user=MANAGER))
 
     lists = session.to(MANAGER.id)[before:]
-    assert all("питання" in m.text.lower() for m in lists)  # only answer lists, no intermediate results
+    assert all("вопрос" in m.text.lower() for m in lists)  # only answer lists, no intermediate results
     pets = session.to(MANAGER.id)[-1]  # the pet question: the manager picks too
-    assert "Фінальне питання" in pets.text and "Відповідей: 18" in pets.text
+    assert "Финальный вопрос" in pets.text and "Ответов: 18" in pets.text
     assert all(b.text.isdigit() for b in buttons_of(pets))
     assert "🎁" not in pets.text  # nobody is blocked on the audit
     await dp.feed_update(bot, press(buttons_of(pets)[0].callback_data, user=MANAGER))
 
     final = session.to(MANAGER.id)[-1]
-    assert final.text.startswith("<b>🏆 Бізнес-бінго · переможці</b>") and final.reply_markup is None
+    assert final.text.startswith("<b>🏆 Бизнес-бинго · победители</b>") and final.reply_markup is None
     text = final.text
-    assert text.index("🎲 Розіграш") < text.index("📝 Найкращі історії") < text.index("🐾 Фінальне питання")
-    assert text.count("(питання ") == 9
-    final_lines = text.split("🐾 Фінальне питання:</b>")[1].strip().splitlines()
-    assert len(final_lines) == 1 and "Структурний аудит бізнесу від THE A (улюбленець: Бублик)" in final_lines[0]
+    assert text.index("🎲 Розыгрыш") < text.index("📝 Лучшие истории") < text.index("🐾 Финальный вопрос")
+    assert text.count("(вопрос ") == 9
+    final_lines = text.split("🐾 Финальный вопрос:</b>")[1].strip().splitlines()
+    assert len(final_lines) == 1 and "Структурный аудит бизнеса от THE A (питомец: Бублик)" in final_lines[0]
     aw = storage.get_state("bingo_awards")
     assert sum(1 for a in aw if a["pool"] == "draw") == 7
     assert sum(1 for a in aw if a["pool"] == "best") == 9
@@ -385,12 +385,12 @@ async def test_bingo_question_without_answers_is_skipped(env, content):
     await play(dp, bot, bingo_user(1), "Гість 1", yes_with_story=(2,))
     await dp.feed_update(bot, press("bingo:start", user=MANAGER))
     lst = session.to(MANAGER.id)[-1]
-    assert "Питання 3 ·" in lst.text  # 1 and 2 had no answers
+    assert "Вопрос 3 ·" in lst.text  # 1 and 2 had no answers
     await dp.feed_update(bot, press(buttons_of(lst)[0].callback_data, user=MANAGER))
     pets = session.to(MANAGER.id)[-1]
-    assert "Фінальне питання" in pets.text
+    assert "Финальный вопрос" in pets.text
     await dp.feed_update(bot, press(buttons_of(pets)[-1].callback_data, user=MANAGER))
-    assert "переможці" in session.to(MANAGER.id)[-1].text
+    assert "победители" in session.to(MANAGER.id)[-1].text
 
 
 async def test_bingo_resume_and_double_pick(env, content):
@@ -403,7 +403,7 @@ async def test_bingo_resume_and_double_pick(env, content):
     await dp.feed_update(bot, press(buttons_of(q1)[-1].callback_data, user=MANAGER))  # second pick on q1: no
     assert sum(1 for a in storage.get_state("bingo_awards") if a["pool"] == "best") == 1
     await dp.feed_update(bot, msg("/bingo", user=MANAGER))  # continue where we stopped
-    assert "Питання 2 ·" in session.to(MANAGER.id)[-1].text
+    assert "Вопрос 2 ·" in session.to(MANAGER.id)[-1].text
 
 
 async def test_bingo_manager_actions_only_for_manager(env):
@@ -412,7 +412,7 @@ async def test_bingo_manager_actions_only_for_manager(env):
     await dp.feed_update(bot, press("bingo:start"))
     assert storage.get_state("bingo_awards") is None
     await dp.feed_update(bot, msg("/bingo"))
-    assert "вже пройшли" in session.to(CLIENT.id)[-1].text
+    assert "уже прошли" in session.to(CLIENT.id)[-1].text
 
 
 async def test_bingo_draw_only_among_finished(env, content):
@@ -422,7 +422,7 @@ async def test_bingo_draw_only_among_finished(env, content):
     await play(dp, bot, bingo_user(3), "Не дійшов", yes_with_story=(), final=None)
     await dp.feed_update(bot, press("bingo:start", user=MANAGER))
     await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(1).id}:final", user=MANAGER))  # pet → audit
-    assert "переможці" in session.to(MANAGER.id)[-1].text
+    assert "победители" in session.to(MANAGER.id)[-1].text
     drawn = sorted(a["name"] for a in storage.get_state("bingo_awards") if a["pool"] == "draw")
     assert drawn == ["Дійшов", "Котик"]  # the audit winner takes part too; the unfinished one doesn't
 
@@ -436,12 +436,12 @@ async def test_bingo_one_gift_per_person(env, content):
         q1 = session.to(MANAGER.id)[-1]
         await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(0).id}:1", user=MANAGER))
         q2 = session.to(MANAGER.id)[-1]
-        assert "Питання 2 ·" in q2.text and "<b>1. Гість 0</b> 🎁:" in q2.text  # listed, but marked
+        assert "Вопрос 2 ·" in q2.text and "<b>1. Гість 0</b> 🎁:" in q2.text  # listed, but marked
 
         edits_before = len(session.sent("EditMessageReplyMarkup"))
         await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(0).id}:2", user=MANAGER))
         alert = session.sent("AnswerCallbackQuery")[-1]
-        assert alert.show_alert and "Гість 0 вже отримав(ла) подарунок" in alert.text
+        assert alert.show_alert and "Гість 0 уже получил(а) подарок" in alert.text
         assert sum(1 for a in storage.get_state("bingo_awards") if a["user_id"] == bingo_user(0).id) == 1
         assert len(session.sent("EditMessageReplyMarkup")) == edits_before  # buttons stay
 
@@ -460,12 +460,12 @@ async def test_bingo_skip_when_everyone_has_a_gift(env, content):
         await dp.feed_update(bot, press(f"bingo:pick:{bingo_user(0).id}:1", user=MANAGER))
         q2 = session.to(MANAGER.id)[-1]
         skip = buttons_of(q2)[-1]
-        assert "пропустити" in skip.text and skip.callback_data == "bingo:skip_q:2"
+        assert "пропустить" in skip.text and skip.callback_data == "bingo:skip_q:2"
         await dp.feed_update(bot, press(skip.callback_data, user=MANAGER))
         pets = session.to(MANAGER.id)[-1]
-        assert "Фінальне питання" in pets.text and "пропустити" not in pets.text
+        assert "Финальный вопрос" in pets.text and "пропустить" not in pets.text
         await dp.feed_update(bot, press(buttons_of(pets)[-1].callback_data, user=MANAGER))  # same person: OK
-        assert "переможці" in session.to(MANAGER.id)[-1].text
+        assert "победители" in session.to(MANAGER.id)[-1].text
         pools = [a["pool"] for a in storage.get_state("bingo_awards")]
         assert pools == ["best", "final"]
     finally:
@@ -484,7 +484,7 @@ async def test_bingo_draw_excludes_winners(env, content):
     aw = storage.get_state("bingo_awards")
     drawn = {a["user_id"] for a in aw if a["pool"] == "draw"}
     assert drawn == {bingo_user(1).id, bingo_user(2).id, bingo_user(3).id}  # all but the mat/bag winner
-    assert final.index("🎲 Розіграш") < final.index("📝 Найкращі історії") < final.index("🐾 Фінальне питання")
+    assert final.index("🎲 Розыгрыш") < final.index("📝 Лучшие истории") < final.index("🐾 Финальный вопрос")
 
 async def test_bingo_participant_numbers_are_permanent(env, content):
     dp, bot, session, storage = env
