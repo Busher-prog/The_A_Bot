@@ -18,4 +18,11 @@ class Settings(BaseSettings):
     texts_path: Path = ROOT / "content" / "texts.yaml"
     # Journals (inbox, leads) and the list of users. On the server: the old bot's folder.
     data_dir: Path = ROOT / "data"
+    # Priority in the bingo cap / t-shirt draw: names separated by ";" (Latin spelling is fine).
+    # Kept in .env on the server, not in the public repository.
+    bingo_vip: str = ""
     log_level: str = "INFO"
+
+    @property
+    def bingo_vip_names(self) -> list[str]:
+        return [n.strip() for n in self.bingo_vip.replace(",", ";").split(";") if n.strip()]

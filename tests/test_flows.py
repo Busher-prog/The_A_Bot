@@ -571,3 +571,26 @@ async def test_bingo_vip_only_for_manager_and_clear(env):
     await dp.feed_update(bot, msg("/bingo_vip Тарас Шевчук", user=MANAGER))
     await dp.feed_update(bot, msg("/bingo_vip очистить", user=MANAGER))
     assert storage.get_state("bingo_vip") == []
+
+
+async def test_bingo_priority_from_server_settings(env, content):
+    """BINGO_VIP in .env (Latin spelling) works without any manager command."""
+    from bot.config import Settings
+    dp, bot, session, storage = env
+    dp["settings"] = Settings(bot_token="42:TEST", managers_chat_id=MANAGER.id, data_dir=storage.dir,
+                              bingo_vip="Taras Shevchuk; Alona Kovaliova")
+    content.bingo.draw_count = 2
+    try:
+        for n in range(5):
+            await play(dp, bot, bingo_user(n), f"Гість {n}", yes_with_story=())
+        await play(dp, bot, bingo_user(8), "Ковальова Альона", yes_with_story=())
+        await play(dp, bot, bingo_user(9), "Тарас Шевчук", yes_with_story=(), final=None)
+        await dp.feed_update(bot, msg("/bingo", user=MANAGER))
+        assert "Приоритет в розыгрыше: Taras Shevchuk, Alona Kovaliova" in session.to(MANAGER.id)[-1].text
+        await dp.feed_update(bot, press("bingo:start", user=MANAGER))
+        pets = session.to(MANAGER.id)[-1]
+        await dp.feed_update(bot, press(buttons_of(pets)[0].callback_data, user=MANAGER))
+        drawn = sorted(a["name"] for a in storage.get_state("bingo_awards") if a["pool"] == "draw")
+        assert drawn == ["Ковальова Альона", "Тарас Шевчук"]
+    finally:
+        content.bingo.draw_count = 10

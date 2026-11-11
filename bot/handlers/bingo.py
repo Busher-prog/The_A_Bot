@@ -233,7 +233,8 @@ def story_questions(content: Content) -> list[int]:
 
 
 # --- priority in the random draw ------------------------------------------------------------------
-# The manager sets names with /bingo_vip (kept on the server only - the repository is public).
+# Names come from BINGO_VIP in /opt/the-a-bot/.env (server only - the repository is public);
+# the manager can add more with /bingo_vip.
 # Names are compared loosely: word order, ё/е, Ukrainian / Russian / Latin spelling
 # ("Алёна Ковалёва" = "Ковалёва Алёна" = "Альона Ковальова" = "Alona Kovaliova").
 
@@ -272,12 +273,13 @@ def is_vip(name: str, vips: list[str]) -> bool:
     return any(_name_key(v) and _name_key(v) <= key for v in vips)
 
 
-def vip_list(db: Storage) -> list[str]:
+def vip_list(db: Storage, settings: Settings | None = None) -> list[str]:
     data = db.get_state("bingo_vip")
-    return data if isinstance(data, list) else []
+    extra = data if isinstance(data, list) else []
+    return (settings.bingo_vip_names if settings else []) + extra
 
 
-def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
+def run_draw(content: Content, db: Storage, settings: Settings | None = None) -> list[tuple[str, str]]:
     """At the very end: caps / t-shirts among participants without a physical gift (audit doesn't count).
     Priority people (/bingo_vip) who registered get theirs first; the rest is random among finishers."""
     drawn = sum(1 for a in awards(db) if a["pool"] == "draw")
@@ -285,7 +287,7 @@ def run_draw(content: Content, db: Storage) -> list[tuple[str, str]]:
     rng.shuffle(items)
     items = items[:max(0, content.bingo.draw_count - drawn)]
     has_gift = {str(a.get("user_id")) for a in awards(db) if a["pool"] in ("best", "gift", "draw")}
-    vips = vip_list(db)
+    vips = vip_list(db, settings)
     free = [(uid, p) for uid, p in players(db).items() if p.get("name") and uid not in has_gift]
     priority = [(uid, p) for uid, p in free if is_vip(p["name"], vips)]
     others = [(uid, p) for uid, p in free if p.get("done_at") and (uid, p) not in priority]
@@ -338,7 +340,8 @@ def marks_of(content: Content, db: Storage) -> tuple[dict[str, str], set[str]]:
     return blocked, drawn
 
 
-async def show_next(message: Message, content: Content, db: Storage) -> None:
+async def show_next(message: Message, content: Content, db: Storage,
+                    settings: Settings | None = None) -> None:
     """Send the answers of the next question still without a winner; at the end — the final list."""
     decided = {a.get("q") for a in awards(db) if a["pool"] == "best"}
     skipped = set(db.get_state("bingo_skipped") or [])
@@ -365,7 +368,7 @@ async def show_next(message: Message, content: Content, db: Storage) -> None:
             return
     # all picks done → random caps / t-shirts among those who got nothing, then the final list
     if not any(a["pool"] == "draw" for a in awards(db)):
-        run_draw(content, db)
+        run_draw(content, db, settings)
     db.set_state("bingo_finished", True)
     await message.answer(final_list(content, db))
 
@@ -448,10 +451,10 @@ async def bingo_command(message: Message, state: FSMContext, content: Content,
     if db.get_state("bingo_finished"):
         await message.answer(final_list(content, db))
     elif db.get_state("bingo_started"):
-        await show_next(message, content, db)  # continue where we stopped
+        await show_next(message, content, db, settings)  # continue where we stopped
     else:
         n = sum(1 for p in players(db).values() if p.get("name"))
-        vips = vip_list(db)
+        vips = vip_list(db, settings)
         extra = f"\n⭐ Приоритет в розыгрыше: {escape(', '.join(vips))}" if vips else ""
         await message.answer(f"<b>🎯 Бизнес-бинго</b>\nУчастников: {n}{extra}",
                              reply_markup=kb([("▶️ Начать", "bingo:start")]))
@@ -464,12 +467,13 @@ async def vip_command(message: Message, command: CommandObject, settings: Settin
     if not is_manager(message.from_user.id, settings):
         return
     name = " ".join((command.args or "").split())
-    vips = vip_list(db)
+    vips = vip_list(db)  # only the names added by command; BINGO_VIP from .env stays
     if name.lower() in ("очистить", "clear", "очистити"):
         vips = []
     elif name and not any(_name_key(name) == _name_key(v) for v in vips):
         vips.append(name)
     db.set_state("bingo_vip", vips)
+    vips = vip_list(db, settings)
     found = [p["name"] for p in players(db).values() if p.get("name") and is_vip(p["name"], vips)]
     lines = ["<b>⭐ Приоритет в розыгрыше кепок и футболок</b>"]
     lines += [f"• {escape(v)}" for v in vips] or ["Список пуст."]
@@ -513,10 +517,10 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         await callback.answer()
         await close()
         if db.get_state("bingo_started"):
-            await show_next(msg, content, db)
+            await show_next(msg, content, db, settings)
             return
         db.set_state("bingo_started", True)
-        await show_next(msg, content, db)
+        await show_next(msg, content, db, settings)
         return
 
     if action == "gift":
@@ -539,7 +543,7 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
             db.set_state("bingo_skipped", sorted(set(db.get_state("bingo_skipped") or []) | {int(tag)}))
         await callback.answer("⏭")
         await close()
-        await show_next(msg, content, db)
+        await show_next(msg, content, db, settings)
         return
 
     # pick: bingo:pick:<uid>:<question number | final>
@@ -564,7 +568,7 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
         give_final(content, db, uid)
         await callback.answer(f"🏆 {p['name']}")
         await close()
-        await show_next(msg, content, db)
+        await show_next(msg, content, db, settings)
         return
 
     items = pool_items(db, content, "best")
@@ -576,4 +580,4 @@ async def manager_button(callback: CallbackQuery, content: Content, settings: Se
     add_award(db, {"name": p["name"], "user_id": int(uid), "prize": prize_id, "pool": "best", "q": q})
     await callback.answer(f"🏆 {p['name']}")
     await close()
-    await show_next(msg, content, db)
+    await show_next(msg, content, db, settings)
