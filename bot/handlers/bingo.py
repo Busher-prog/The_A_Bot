@@ -254,7 +254,7 @@ def answers_for(db: Storage, q: int) -> list[tuple[str, dict]]:
 
 # Who may still be chosen. Change BLOCKING_POOLS to change the rule:
 #   "best"  - won with an answer → can't win again (neither another answer nor the pet question);
-#   "draw"  - won a cap / t-shirt at random → may still win (shown with 🎲).
+#   "draw"  - won a cap / t-shirt at random → may still win (not marked in the lists).
 BLOCKING_POOLS = {"best", "final"}
 
 
@@ -315,20 +315,18 @@ async def send_answers(message: Message, content: Content, db: Storage, q: int,
 async def send_list(message: Message, head: str, answers: list[tuple[str, str]], names: list[str],
                     tag: str, blocked: dict[str, str], drawn: set[str], nums: dict[str, int]) -> None:
     """Numbered "N. Name: answer" list; the only buttons are the numbers (bingo:pick:<uid>:<tag>).
-    🎁 = already won with an answer (can't be chosen), 🎲 = won the random draw (can be chosen).
+    🎁 = already won with an answer (can't be chosen). Draw winners are not marked (no spoilers).
     If nobody can be chosen, a skip button is added."""
     legend = []
     if any(uid in blocked for uid, _ in answers):
         legend.append("🎁 - вже отримав(ла) подарунок за відповідь")
-    if any(uid in drawn and uid not in blocked for uid, _ in answers):
-        legend.append("🎲 - виграв(ла) у розіграші, можна обрати")
     if legend:
         head += "\n" + "\n".join(legend)
     parts, chunk, buttons = [], head + "\n", []
     for (uid, answer), name in zip(answers, names):
         n = nums[uid]  # the participant's permanent number
         answer = answer if len(answer) <= 300 else answer[:297] + "…"
-        mark = " 🎁" if uid in blocked else (" 🎲" if uid in drawn else "")
+        mark = " 🎁" if uid in blocked else ""  # draw winners are not shown: no spoilers before the end
         line = f"\n<b>{n}. {escape(name)}</b>{mark}: {escape(answer)}"
         if len(chunk) + len(line) > 3900 or len(buttons) >= 60:
             parts.append((chunk, buttons))

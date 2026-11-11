@@ -348,7 +348,7 @@ async def test_bingo_evening_with_minimal_buttons(env, content):
         assert f"Питання {q} ·" in lst.text and "Відповідей: 20" in lst.text  # everybody is listed
         assert all(b.text.isdigit() for b in buttons_of(lst))
         assert lst.text.count("</b> 🎁:") == q - 1  # previous answer winners: blocked
-        assert lst.text.count("</b> 🎲:") + lst.text.count("</b> 🎁:") >= 7  # draw winners: marked, allowed
+        assert "🎲" not in lst.text  # draw results are not revealed before the final list
         await dp.feed_update(bot, press(free_button(lst).callback_data, user=MANAGER))
 
     lists = session.to(MANAGER.id)[before:]
@@ -469,7 +469,7 @@ async def test_bingo_draw_winner_can_still_win(env, content):
     await play(dp, bot, bingo_user(0), "Гість 0", yes_with_story=(0,))
     await dp.feed_update(bot, press("bingo:start", user=MANAGER))  # the only finisher wins a cap/t-shirt
     q1 = session.to(MANAGER.id)[-1]
-    assert "<b>1. Гість 0</b> 🎲:" in q1.text
+    assert "<b>1. Гість 0</b>:" in q1.text  # draw winner: not marked, can be chosen
     await dp.feed_update(bot, press(buttons_of(q1)[0].callback_data, user=MANAGER))
     pools = [a["pool"] for a in storage.get_state("bingo_awards") if a["user_id"] == bingo_user(0).id]
     assert pools == ["draw", "best"]
