@@ -251,7 +251,8 @@ async def test_bingo_guest_flow(env, content):
     assert [r[0].text for r in q1.reply_markup.inline_keyboard] == [content.bingo.yes_button, content.bingo.no_button]
 
     await dp.feed_update(bot, press("bingo:ans:0:y"))
-    assert session.to(CLIENT.id)[-1].text == content.bingo.story_prompt
+    prompt = session.to(CLIENT.id)[-1].text
+    assert "«Банк просив «ще один документик»»" in prompt and content.bingo.questions[0].prompt in prompt
     await dp.feed_update(bot, msg("Банк просив виписку за 5 років тричі"))
     assert session.to(MANAGER.id) == []  # no card per story: the manager reads lists per question
     assert "Питання 2 з 9" in session.to(CLIENT.id)[-1].text
@@ -395,10 +396,29 @@ async def test_bingo_question_without_story(env, content):
     dp, bot, session, storage = env
     content.bingo.questions[0].story = False
     try:
-        assert content.bingo.best_limit == 8
+        assert content.bingo.best_limit == 6
         await dp.feed_update(bot, press("src:iam:bingo"))
         await dp.feed_update(bot, msg("Олена"))
         await dp.feed_update(bot, press("bingo:ans:0:y"))
         assert "Питання 2 з 9" in session.to(CLIENT.id)[-1].text
     finally:
         content.bingo.questions[0].story = True
+
+
+def test_bingo_open_questions(content):
+    open_q = [q.text for q in content.bingo.questions if q.story]
+    assert len(open_q) == 7 and content.bingo.best_limit == 7
+    assert "Знаю, що таке KYC, і хотів би це забути" not in open_q
+    assert all(q.prompt for q in content.bingo.questions if q.story)
+
+
+async def test_bingo_closed_question_goes_on(env, content):
+    dp, bot, session, storage = env
+    await dp.feed_update(bot, press("src:iam:bingo"))
+    await dp.feed_update(bot, msg("Олена"))
+    for q in range(6):
+        await dp.feed_update(bot, press(f"bingo:ans:{q}:n"))
+    await dp.feed_update(bot, press("bingo:ans:6:y"))  # KYC: no story
+    assert "Питання 8 з 9" in session.to(CLIENT.id)[-1].text
+    await dp.feed_update(bot, press("bingo:ans:7:y"))  # crypto: story with its own hint
+    assert "Як ви отримуєте оплату" in session.to(CLIENT.id)[-1].text

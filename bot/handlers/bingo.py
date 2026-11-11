@@ -156,7 +156,10 @@ async def got_answer(callback: CallbackQuery, state: FSMContext, content: Conten
     if yn == "y" and b.questions[q].story:
         await state.set_state(BingoState.story)
         await state.update_data(bingo_q=q)
-        await callback.message.answer(b.story_prompt, reply_markup=kb([(b.skip_button, f"bingo:skip:{q}")]))
+        prompt = b.questions[q].prompt or b.default_prompt
+        await callback.message.answer(
+            f"«{escape(b.questions[q].text)}»\n\n" + b.story_prompt.format(prompt=escape(prompt)),
+            reply_markup=kb([(b.skip_button, f"bingo:skip:{q}")]))
     else:
         await advance(callback.message, state, content, db, user.id, q)
 

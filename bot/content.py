@@ -77,6 +77,7 @@ class Prize(BaseModel):
 class BingoQuestion(BaseModel):
     text: str
     story: bool = True  # ask for a detailed story after "yes"
+    prompt: str | None = None  # question-specific hint for the story
 
     @model_validator(mode="before")
     @classmethod
@@ -91,6 +92,7 @@ class Bingo(BaseModel):
     yes_button: str
     no_button: str
     question_header: str
+    default_prompt: str = "Розкажіть детальніше, як це було 👇"
     story_prompt: str
     skip_button: str
     questions: list[BingoQuestion] = Field(min_length=1)
